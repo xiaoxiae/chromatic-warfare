@@ -346,7 +346,6 @@
                 // Animation system
                 this.isAnimating = false;
                 this.animationData = null;
-                this.turnDuration = 1000; // Default 1 second, will be updated
                 this.lastRenderTime = 0;
                 this.animationStartTime = 0;
                 this.currentPhase = 'idle'; // 'movement', 'state_change', 'generation', 'idle'
@@ -406,7 +405,7 @@
                 }
                 
                 const elapsed = timestamp - this.animationStartTime;
-                const progress = elapsed / this.turnDuration;
+                const progress = elapsed / this.serverTurnDuration;
                 
                 // Phase timings (as percentages of turn duration)
                 const movementEnd = 0.30;
@@ -885,9 +884,6 @@ finishMovementPhase() {
                     console.log('No animations to perform');
                     return;
                 }
-                
-                // Estimate turn duration (default 1000ms, could be sent from server)
-                this.turnDuration = 1000;
                 
                 // Initialize displayed vertices from current game state
                 this.displayedVertices.clear();

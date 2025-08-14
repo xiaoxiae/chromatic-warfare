@@ -1151,6 +1151,9 @@ async def keyboard_input_handler(server: GameServer) -> None:
     logger.info("  'games' - List all active games")
     logger.info("  'create <game_id>' - Create a new game")
     logger.info("  'start <game_id>' - Force start a specific game")
+    logger.info("  'reset <game_id>' - Reset a specific game")
+    logger.info("  'set turns <game_id> <turns>' - Set max turns for a game")
+    logger.info("  'set duration <game_id> <seconds>' - Set turn duration for a game")
     logger.info("  'status' - Show current server status")
     logger.info("  'help' - Show this help message")
     
@@ -1179,7 +1182,8 @@ async def keyboard_input_handler(server: GameServer) -> None:
                             if game:
                                 status = "Active" if game.game_started else "Waiting"
                                 turn = game.game_state.current_turn if game.game_state else 0
-                                logger.info(f"  {game_id}: {status}, Turn {turn}, {len(game.bot_connections)} bots, {len(game.viewer_connections)} viewers")
+                                logger.info(f"  {game_id}: {status}, Turn {turn}/{game.max_turns}, {len(game.bot_connections)} bots, {len(game.viewer_connections)} viewers")
+                                logger.info(f"    Turn Duration: {game.turn_duration_seconds}s")
                             
                 elif command.startswith("create "):
                     try:
@@ -1231,6 +1235,75 @@ async def keyboard_input_handler(server: GameServer) -> None:
                         logger.warning("Game ID required: start <game_id>")
                     except Exception as e:
                         logger.error(f"Failed to start game: {e}")
+                
+                elif command.startswith("set turns "):
+                    try:
+                        parts = command.split()
+                        if len(parts) < 4:
+                            logger.warning("Usage: set turns <game_id> <max_turns>")
+                        else:
+                            game_id = parts[2]
+                            max_turns = int(parts[3])
+                            
+                            if max_turns < 1:
+                                logger.warning("Max turns must be at least 1")
+                                continue
+                                
+                            game = server.get_game(game_id)
+                            if not game:
+                                logger.warning(f"Game {game_id} does not exist")
+                            elif game.game_started:
+                                logger.warning(f"Cannot change max turns for game {game_id} - game has already started")
+                            else:
+                                old_turns = game.max_turns
+                                game.max_turns = max_turns
+                                game.game_state.max_turns = max_turns
+                                logger.info(f"Game {game_id}: Max turns changed from {old_turns} to {max_turns}")
+                                
+                                # Broadcast updated game state to notify clients
+                                await game.broadcast_game_state()
+                                
+                    except ValueError:
+                        logger.warning("Max turns must be a valid number")
+                    except IndexError:
+                        logger.warning("Usage: set turns <game_id> <max_turns>")
+                    except Exception as e:
+                        logger.error(f"Failed to set max turns: {e}")
+                
+                elif command.startswith("set duration "):
+                    try:
+                        parts = command.split()
+                        if len(parts) < 4:
+                            logger.warning("Usage: set duration <game_id> <seconds>")
+                        else:
+                            game_id = parts[2]
+                            duration = float(parts[3])
+                            
+                            if duration <= 0:
+                                logger.warning("Turn duration must be greater than 0")
+                                continue
+                                
+                            game = server.get_game(game_id)
+                            if not game:
+                                logger.warning(f"Game {game_id} does not exist")
+                            else:
+                                old_duration = game.turn_duration_seconds
+                                game.turn_duration_seconds = duration
+                                logger.info(f"Game {game_id}: Turn duration changed from {old_duration}s to {duration}s")
+                                
+                                # If game is running, the change will take effect on the next turn
+                                if game.game_started:
+                                    logger.info(f"Game {game_id} is running - new duration will apply to subsequent turns")
+                                
+                                # Broadcast updated game state to notify clients
+                                await game.broadcast_game_state()
+                                
+                    except ValueError:
+                        logger.warning("Duration must be a valid number")
+                    except IndexError:
+                        logger.warning("Usage: set duration <game_id> <seconds>")
+                    except Exception as e:
+                        logger.error(f"Failed to set turn duration: {e}")
                     
                 elif command == "status":
                     logger.info(f"=== Multi-Game Server Status ===")
@@ -1242,6 +1315,12 @@ async def keyboard_input_handler(server: GameServer) -> None:
                         logger.info(f"Total Bots: {total_bots}")
                         logger.info(f"Total Viewers: {total_viewers}")
                         logger.info(f"Games: {list(server.games.keys())}")
+                        
+                        # Show detailed game info
+                        for game_id, game in server.games.items():
+                            status = "Active" if game.game_started else "Waiting"
+                            turn = game.game_state.current_turn if game.game_state else 0
+                            logger.info(f"  {game_id}: {status}, Turn {turn}/{game.max_turns}, Duration: {game.turn_duration_seconds}s")
                     
                 elif command == "help":
                     logger.info("=== Available Commands ===")
@@ -1250,6 +1329,8 @@ async def keyboard_input_handler(server: GameServer) -> None:
                     logger.info("  'create <game_id>' - Create a new game")
                     logger.info("  'start <game_id>' - Force start a specific game")
                     logger.info("  'reset <game_id>' - Reset a specific game")
+                    logger.info("  'set turns <game_id> <max_turns>' - Set maximum turns for a game (before start)")
+                    logger.info("  'set duration <game_id> <seconds>' - Set turn duration for a game")
                     logger.info("  'status' - Show current server status")
                     logger.info("  'help' - Show this help message")
                     
