@@ -283,6 +283,11 @@
                     <div class="info-item">
                         <span>Turn:</span>
                         <span id="currentTurn">-</span>
+                        <span id="turnProgress"> / -</span>
+                    </div>
+                    <div class="info-item">
+                        <span>Turn Duration:</span>
+                        <span id="turnDuration">-</span>s
                     </div>
                     <div class="info-item">
                         <span>Status:</span>
@@ -352,6 +357,8 @@
                 this.movingUnits = []; // Units currently animating
                 this.unitGenerationAnimations = []; // +Weight text animations
                 
+                this.serverTurnDuration = 1000; // Default 1 second in milliseconds
+                this.maxTurns = 10; // Default max turns
                 
                 this.setupCanvas();
                 this.updateUIWithGameId();
@@ -456,32 +463,57 @@
                 });
             }
 
-            updateMovementAnimation(progress) {
-                
-                // Update positions of moving units
-                this.movingUnits.forEach(unit => {
-                    const easedProgress = this.easeInOutCubic(progress);
-                    unit.currentX = unit.startX + (unit.endX - unit.startX) * easedProgress;
-                    unit.currentY = unit.startY + (unit.endY - unit.startY) * easedProgress;
-                    unit.alpha = 1.0 - (progress * 0.3); // Slightly fade during movement
-                });
+updateMovementAnimation(progress) {
+    // Update positions of moving units with combat mechanics
+    this.movingUnits.forEach(unit => {
+        const easedProgress = this.easeInOutCubic(progress);
+        
+        if (unit.combatResult === 'survivor' && unit.finalX !== undefined) {
+            // Bidirectional combat unit
+            if (progress <= 0.5) {
+                // First half: move to combat point
+                const combatProgress = progress * 2;
+                unit.currentX = unit.startX + (unit.endX - unit.startX) * combatProgress;
+                unit.currentY = unit.startY + (unit.endY - unit.startY) * combatProgress;
+                unit.alpha = 1.0;
+                unit.displayedUnits = unit.originalUnits;
+            } else {
+                // Second half: survivors continue to destination
+                if (unit.survivorCount > 0) {
+                    const survivalProgress = (progress - 0.5) * 2;
+                    unit.currentX = unit.endX + (unit.finalX - unit.endX) * survivalProgress;
+                    unit.currentY = unit.endY + (unit.finalY - unit.endY) * survivalProgress;
+                    unit.alpha = 1.0;
+                    unit.displayedUnits = unit.survivorCount;
+                } else {
+                    // No survivors - fade out at combat point
+                    unit.alpha = Math.max(0, 1.0 - (progress - 0.5) * 4); // Fade out quickly
+                    unit.displayedUnits = 0;
+                }
             }
-
-            updateStateChangeAnimation(progress) {
-                // Animate color transitions for vertices that changed ownership
-                const easedProgress = this.easeInOutCubic(progress);
-                
-                this.displayedVertices.forEach((displayVertex, vertexId) => {
-                    const targetVertex = this.targetVertices.get(vertexId);
-                    if (!targetVertex) return;
-                    
-                    // Animate controller change
-                    if (displayVertex.controller !== targetVertex.controller) {
-                        displayVertex.controllerTransition = easedProgress;
-                        displayVertex.newController = targetVertex.controller;
-                    }
-                });
+        } else if (unit.combatResult === 'eliminated') {
+            // Units that get eliminated in combat
+            if (progress <= 0.5) {
+                // Move to combat point
+                const combatProgress = progress * 2;
+                unit.currentX = unit.startX + (unit.endX - unit.startX) * combatProgress;
+                unit.currentY = unit.startY + (unit.endY - unit.startY) * combatProgress;
+                unit.alpha = 1.0;
+                unit.displayedUnits = unit.originalUnits;
+            } else {
+                // Fade out at combat point
+                unit.alpha = Math.max(0, 1.0 - (progress - 0.5) * 4);
+                unit.displayedUnits = 0;
             }
+        } else {
+            // Single direction move - no combat
+            unit.currentX = unit.startX + (unit.endX - unit.startX) * easedProgress;
+            unit.currentY = unit.startY + (unit.endY - unit.startY) * easedProgress;
+            unit.alpha = 1.0 - (progress * 0.3); // Slightly fade during movement
+            unit.displayedUnits = unit.units;
+        }
+    });
+}
 
             startGenerationAnimations() {
                 // Initialize +Weight text animations
@@ -573,16 +605,17 @@
                 };
             }
 
-            finishMovementPhase() {
-                // Clear moving units and update source vertices
-                this.movingUnits.forEach(unit => {
-                    const sourceVertex = this.displayedVertices.get(unit.fromVertex);
-                    if (sourceVertex) {
-                        sourceVertex.units = Math.max(0, sourceVertex.units - unit.units - unit.cost);
-                    }
-                });
-                this.movingUnits = [];
-            }
+finishMovementPhase() {
+    // Update source vertices, accounting for combat results
+    this.movingUnits.forEach(unit => {
+        const sourceVertex = this.displayedVertices.get(unit.fromVertex);
+        if (sourceVertex) {
+            // Deduct the original units sent (regardless of combat outcome)
+            sourceVertex.units = Math.max(0, sourceVertex.units - unit.units - unit.cost);
+        }
+    });
+    this.movingUnits = [];
+}
 
             finishStateChangePhase() {
                 // Instantly snap to post-movement, pre-generation state
@@ -697,7 +730,7 @@
                     this.socket = new WebSocket(url);
                     
                     this.socket.onopen = () => {
-                        this.updateConnectionStatus('connected', 'Connected to game server');
+                        this.updateConnectionStatus('connected', 'Connected');
                         this.addLogEntry(`Successfully connected as viewer for game ${this.gameId}`, 'game-event');
                         
                         // Join as viewer with game ID
@@ -717,7 +750,7 @@
                     };
                     
                     this.socket.onclose = () => {
-                        this.updateConnectionStatus('disconnected', 'Disconnected from server');
+                        this.updateConnectionStatus('disconnected', 'Disconnected');
                         this.addLogEntry(`Connection lost for game ${this.gameId}. Reconnecting in 3 seconds...`, 'system');
                         
                         // Attempt reconnection after 3 seconds
@@ -790,6 +823,8 @@
                 // Reset UI elements
                 document.getElementById('currentTurn').textContent = '-';
                 document.getElementById('gameStatus').textContent = 'Waiting';
+                document.getElementById('turnProgress').textContent = ' / -';
+                document.getElementById('turnDuration').textContent = '-';
                 
                 // Clear player list
                 const playerList = document.getElementById('playerList');
@@ -810,6 +845,17 @@
 
             handleTurnProcessed(turnData) {
                 console.log('Turn processed received:', turnData);
+
+                // Update timing information if provided
+                if (turnData.turn_duration_seconds !== undefined) {
+                    this.serverTurnDuration = turnData.turn_duration_seconds * 1000;
+                    document.getElementById('turnDuration').textContent = turnData.turn_duration_seconds.toFixed(1);
+                }
+                
+                if (turnData.max_turns !== undefined) {
+                    this.maxTurns = turnData.max_turns;
+                    document.getElementById('turnProgress').textContent = ` / ${this.maxTurns}`;
+                }
                 
                 // Log player actions for this turn
                 this.logPlayerActions(turnData);
@@ -921,60 +967,137 @@
                 }
             }
 
-            setupMovingUnits(moveAnimations) {
-                this.movingUnits = [];
-                
-                if (!this.gameState || !this.gameState.graph) return;
-                
-                // Calculate current render parameters
-                const canvas = this.canvas;
-                const rect = canvas.getBoundingClientRect();
-                const width = rect.width;
-                const height = rect.height;
-                const vertices = this.gameState.graph.vertices;
-                
-                if (vertices.length === 0) return;
-                
-                const minX = Math.min(...vertices.map(v => v.position[0]));
-                const maxX = Math.max(...vertices.map(v => v.position[0]));
-                const minY = Math.min(...vertices.map(v => v.position[1]));
-                const maxY = Math.max(...vertices.map(v => v.position[1]));
-                
-                const graphWidth = maxX - minX;
-                const graphHeight = maxY - minY;
-                
-                const padding = 60;
-                const scale = Math.min(
-                    (width - 2 * padding) / (graphWidth || 1),
-                    (height - 2 * padding) / (graphHeight || 1)
-                );
-                
-                const offsetX = (width - graphWidth * scale) / 2 - minX * scale;
-                const offsetY = (height - graphHeight * scale) / 2 - minY * scale;
-                
-                // Create moving unit objects
-                moveAnimations.forEach(move => {
-                    const fromPos = this.getVertexPosition(move.from_vertex, scale, offsetX, offsetY);
-                    const toPos = this.getVertexPosition(move.to_vertex, scale, offsetX, offsetY);
-                    
-                    if (fromPos && toPos) {
-                        this.movingUnits.push({
-                            playerId: move.player_id,
-                            fromVertex: move.from_vertex,
-                            toVertex: move.to_vertex,
-                            units: move.units,
-                            cost: move.cost,
-                            startX: fromPos.x,
-                            startY: fromPos.y,
-                            endX: toPos.x,
-                            endY: toPos.y,
-                            currentX: fromPos.x,
-                            currentY: fromPos.y,
-                            alpha: 1.0
-                        });
-                    }
+setupMovingUnits(moveAnimations) {
+    this.movingUnits = [];
+    
+    if (!this.gameState || !this.gameState.graph) return;
+    
+    // Calculate current render parameters
+    const canvas = this.canvas;
+    const rect = canvas.getBoundingClientRect();
+    const width = rect.width;
+    const height = rect.height;
+    const vertices = this.gameState.graph.vertices;
+    
+    if (vertices.length === 0) return;
+    
+    const minX = Math.min(...vertices.map(v => v.position[0]));
+    const maxX = Math.max(...vertices.map(v => v.position[0]));
+    const minY = Math.min(...vertices.map(v => v.position[1]));
+    const maxY = Math.max(...vertices.map(v => v.position[1]));
+    
+    const graphWidth = maxX - minX;
+    const graphHeight = maxY - minY;
+    
+    const padding = 60;
+    const scale = Math.min(
+        (width - 2 * padding) / (graphWidth || 1),
+        (height - 2 * padding) / (graphHeight || 1)
+    );
+    
+    const offsetX = (width - graphWidth * scale) / 2 - minX * scale;
+    const offsetY = (height - graphHeight * scale) / 2 - minY * scale;
+    
+    // Group moves by edge (bidirectional)
+    const edgeMoves = new Map();
+    
+    moveAnimations.forEach(move => {
+        // Create a consistent edge key regardless of direction
+        const edgeKey = [move.from_vertex, move.to_vertex].sort().join('-');
+        
+        if (!edgeMoves.has(edgeKey)) {
+            edgeMoves.set(edgeKey, []);
+        }
+        edgeMoves.get(edgeKey).push(move);
+    });
+    
+    // Process each edge's moves
+    edgeMoves.forEach((moves, edgeKey) => {
+        if (moves.length === 1) {
+            // Single direction move - no combat
+            const move = moves[0];
+            const fromPos = this.getVertexPosition(move.from_vertex, scale, offsetX, offsetY);
+            const toPos = this.getVertexPosition(move.to_vertex, scale, offsetX, offsetY);
+            
+            if (fromPos && toPos) {
+                this.movingUnits.push({
+                    playerId: move.player_id,
+                    fromVertex: move.from_vertex,
+                    toVertex: move.to_vertex,
+                    units: move.units,
+                    cost: move.cost,
+                    startX: fromPos.x,
+                    startY: fromPos.y,
+                    endX: toPos.x,
+                    endY: toPos.y,
+                    currentX: fromPos.x,
+                    currentY: fromPos.y,
+                    alpha: 1.0,
+                    combatResult: 'survivor' // This unit will reach its destination
                 });
             }
+        } else if (moves.length === 2) {
+            // Bidirectional moves - combat in the middle
+            const [move1, move2] = moves;
+            const pos1 = this.getVertexPosition(move1.from_vertex, scale, offsetX, offsetY);
+            const pos2 = this.getVertexPosition(move1.to_vertex, scale, offsetX, offsetY);
+            
+            if (pos1 && pos2) {
+                // Calculate midpoint for combat
+                const midX = (pos1.x + pos2.x) / 2;
+                const midY = (pos1.y + pos2.y) / 2;
+                
+                // Calculate combat result
+                const units1 = move1.units;
+                const units2 = move2.units;
+                const survivors1 = Math.max(0, units1 - units2);
+                const survivors2 = Math.max(0, units2 - units1);
+                
+                // Create units for first move
+                this.movingUnits.push({
+                    playerId: move1.player_id,
+                    fromVertex: move1.from_vertex,
+                    toVertex: move1.to_vertex,
+                    units: units1,
+                    cost: move1.cost,
+                    startX: pos1.x,
+                    startY: pos1.y,
+                    endX: midX,
+                    endY: midY,
+                    finalX: pos2.x, // Where survivors go
+                    finalY: pos2.y,
+                    currentX: pos1.x,
+                    currentY: pos1.y,
+                    alpha: 1.0,
+                    combatResult: survivors1 > 0 ? 'survivor' : 'eliminated',
+                    survivorCount: survivors1,
+                    originalUnits: units1
+                });
+                
+                // Create units for second move
+                this.movingUnits.push({
+                    playerId: move2.player_id,
+                    fromVertex: move2.from_vertex,
+                    toVertex: move2.to_vertex,
+                    units: units2,
+                    cost: move2.cost,
+                    startX: pos2.x,
+                    startY: pos2.y,
+                    endX: midX,
+                    endY: midY,
+                    finalX: pos1.x, // Where survivors go
+                    finalY: pos1.y,
+                    currentX: pos2.x,
+                    currentY: pos2.y,
+                    alpha: 1.0,
+                    combatResult: survivors2 > 0 ? 'survivor' : 'eliminated',
+                    survivorCount: survivors2,
+                    originalUnits: units2
+                });
+            }
+        }
+    });
+}
 
             updateConnectionStatus(status, message) {
                 const indicator = document.getElementById('connectionStatus');
@@ -994,9 +1117,20 @@
                 
                 const wasFirstState = !this.gameState;
                 this.gameState = gameState;
+
+                // Update timing information from server
+                if (gameState.turn_duration_seconds !== undefined) {
+                    this.serverTurnDuration = gameState.turn_duration_seconds * 1000; // Convert to milliseconds
+                    document.getElementById('turnDuration').textContent = gameState.turn_duration_seconds.toFixed(1);
+                }
+                
+                if (gameState.max_turns !== undefined) {
+                    this.maxTurns = gameState.max_turns;
+                }
                 
                 // Update UI elements
                 document.getElementById('currentTurn').textContent = gameState.turn;
+                document.getElementById('turnProgress').textContent = ` / ${this.maxTurns}`;
                 document.getElementById('gameStatus').textContent = 
                     gameState.game_status.charAt(0).toUpperCase() + gameState.game_status.slice(1);
                 
@@ -1158,31 +1292,42 @@
                 ctx.fillText(vertex.units.toString(), x, y);
             }
 
-            renderMovingUnits() {
-                const ctx = this.ctx;
-                
-                this.movingUnits.forEach(unit => {
-                    const color = this.playerColors[unit.playerId] || '#ffffff';
-                    
-                    // Draw moving unit as a smaller circle
-                    ctx.save();
-                    ctx.globalAlpha = unit.alpha;
-                    
-                    ctx.beginPath();
-                    ctx.arc(unit.currentX, unit.currentY, 8, 0, 2 * Math.PI);
-                    ctx.fillStyle = color;
-                    ctx.fill();
-                    
-                    // Draw unit count
-                    ctx.fillStyle = '#fdf6e3'; /* Solarized light base3 */
-                    ctx.font = 'bold 10px sans-serif';
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
-                    ctx.fillText(unit.units.toString(), unit.currentX, unit.currentY);
-                    
-                    ctx.restore();
-                });
-            }
+renderMovingUnits() {
+    const ctx = this.ctx;
+    
+    this.movingUnits.forEach(unit => {
+        if (unit.alpha <= 0 || (unit.displayedUnits !== undefined && unit.displayedUnits <= 0)) return;
+        
+        const color = this.playerColors[unit.playerId] || '#ffffff';
+        const displayUnits = unit.displayedUnits !== undefined ? unit.displayedUnits : unit.units;
+        
+        // Draw moving unit as a smaller circle
+        ctx.save();
+        ctx.globalAlpha = unit.alpha;
+        
+        // Add combat effect - red glow for units in combat
+        if (unit.combatResult && unit.combatResult !== 'survivor' && unit.alpha > 0.5) {
+            ctx.shadowColor = '#dc322f';
+            ctx.shadowBlur = 10;
+        }
+        
+        ctx.beginPath();
+        ctx.arc(unit.currentX, unit.currentY, 8, 0, 2 * Math.PI);
+        ctx.fillStyle = color;
+        ctx.fill();
+        
+        // Draw unit count only if there are units to display
+        if (displayUnits > 0) {
+            ctx.fillStyle = '#fdf6e3'; /* Solarized light base3 */
+            ctx.font = 'bold 10px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(displayUnits.toString(), unit.currentX, unit.currentY);
+        }
+        
+        ctx.restore();
+    });
+}
 
             renderUnitGenerationAnimations() {
                 const ctx = this.ctx;

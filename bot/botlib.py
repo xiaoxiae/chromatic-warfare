@@ -168,21 +168,25 @@ class GameState:
         """Get my neighboring vertices."""
         return [v for v in self.get_neighbors(vertex_id) if v.is_mine]
     
-    def can_attack(self, from_vertex: int, to_vertex: int, units: int) -> bool:
-        """Check if an attack is possible."""
+    def can_capture(self, from_vertex: int, to_vertex: int, units: int) -> bool:
+        """Check if it's possible to capture the given vertex; returns False if own."""
         source = self.get_vertex(from_vertex)
         target = self.get_vertex(to_vertex)
         
         if not source or not target or not source.is_mine:
             return False
-        
+
         # Check adjacency
         if to_vertex not in self._adjacency.get(from_vertex, []):
             return False
         
         # Calculate cost
-        cost = self.calculate_movement_cost(from_vertex, to_vertex)
-        return source.units >= units + cost
+        if target.is_enemy:
+            return units > target.units
+        elif target.is_mine:
+            return False
+        elif target.is_neutral:
+            return units >= target.weight
     
     def calculate_movement_cost(self, from_vertex: int, to_vertex: int) -> int:
         """Calculate the cost of moving units."""
@@ -264,49 +268,13 @@ class GameBot(ABC):
     
     # High-level convenience methods
     
-    def attack(self, from_vertex: Vertex, to_vertex: Vertex, units: int) -> Command:
-        """Create an attack command."""
+    def move(self, from_vertex: Vertex, to_vertex: Vertex, units: int) -> Command:
+        """Move units"""
         return Command(from_vertex.id, to_vertex.id, units)
-    
-    def move_all_but(self, from_vertex: Vertex, to_vertex: Vertex, keep: int = 1) -> Command:
-        """Move all units except a specified number."""
-        units_to_move = max(0, from_vertex.units - keep)
-        return Command(from_vertex.id, to_vertex.id, units_to_move)
-    
-    def reinforce(self, from_vertex: Vertex, to_vertex: Vertex, units: int) -> Command:
-        """Move units between your own vertices (no cost)."""
-        return Command(from_vertex.id, to_vertex.id, units)
-    
-    def find_weakest_enemy_neighbor(self, vertex: Vertex) -> Optional[Vertex]:
-        """Find the weakest enemy neighbor of a vertex."""
-        if not self.game_state:
-            return None
-        
-        enemy_neighbors = self.game_state.get_enemy_neighbors(vertex.id)
-        if not enemy_neighbors:
-            return None
-        
-        return min(enemy_neighbors, key=lambda v: v.units)
-    
-    def find_weakest_neutral_neighbor(self, vertex: Vertex) -> Optional[Vertex]:
-        """Find the weakest neutral neighbor of a vertex."""
-        if not self.game_state:
-            return None
-        
-        neutral_neighbors = self.game_state.get_neutral_neighbors(vertex.id)
-        if not neutral_neighbors:
-            return None
-        
-        return min(neutral_neighbors, key=lambda v: v.weight)
-    
-    def can_defeat(self, from_vertex: Vertex, target: Vertex) -> bool:
-        """Check if we can defeat a target vertex."""
-        if not self.game_state:
-            return False
-        
-        cost = self.game_state.calculate_movement_cost(from_vertex.id, target.id)
-        required_units = target.units + 1 if target.is_enemy else 1
-        return from_vertex.units >= required_units + cost
+
+    def move_all(self, from_vertex: Vertex, to_vertex: Vertex) -> Command:
+        """Move all units."""
+        return Command(from_vertex.id, to_vertex.id, from_vertex.units)
     
     def get_frontline_vertices(self) -> List[Vertex]:
         """Get vertices that have enemy or neutral neighbors."""
@@ -320,19 +288,6 @@ class GameBot(ABC):
                 frontline.append(vertex)
         
         return frontline
-    
-    def get_interior_vertices(self) -> List[Vertex]:
-        """Get vertices that are surrounded by friendly vertices."""
-        if not self.game_state:
-            return []
-        
-        interior = []
-        for vertex in self.game_state.my_vertices:
-            neighbors = self.game_state.get_neighbors(vertex.id)
-            if neighbors and all(n.is_mine for n in neighbors):
-                interior.append(vertex)
-        
-        return interior
     
     def get_distance_to_frontline(self, vertex_id: int) -> int:
         """
@@ -396,8 +351,6 @@ class GameBot(ABC):
         
         # No path found (shouldn't happen if graph is connected)
         return -1
-    
-    # Low-level command building
     
     def build_command(self, from_id: int, to_id: int, units: int) -> Command:
         """Build a command with raw vertex IDs."""

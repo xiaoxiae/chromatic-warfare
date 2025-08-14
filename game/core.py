@@ -702,19 +702,11 @@ class GameEngine:
         
         # Pay the weight cost
         if total_attacking_units < vertex.weight:
-            # Not enough units to take the vertex, all attackers die
             return
         
         effective_units = total_attacking_units - vertex.weight
-        if effective_units <= 0:
-            # All units died paying the cost
-            return
-        
-        # Probabilistic resolution among surviving attackers
-        total_effective = sum(max(0, units - (vertex.weight * units // total_attacking_units)) 
-                             for units in attacks_by_player.values())
-        
-        if total_effective <= 0:
+    
+        if effective_units < 0:
             return
         
         # Calculate probabilities based on proportion of attacking units

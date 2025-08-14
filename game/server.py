@@ -13,7 +13,7 @@ import sys
 import time
 from typing import Dict, Set, Optional, Any
 from websockets.server import WebSocketServerProtocol
-from game_core import GameState, GameEngine, Command, PlayerStatus
+from core import GameState, GameEngine, Command, PlayerStatus
 from typing import *
 
 # Set up logging
@@ -744,6 +744,8 @@ class GameInstance:
                 "unit_generation": unit_generation_data,
                 "eliminations": turn_result["eliminations"],
                 "game_over": turn_result["game_over"],
+                "turn_duration_seconds": self.turn_duration_seconds,  # Add timing info
+                "max_turns": self.max_turns
             }
             
             # Broadcast detailed turn data first (for animations)
@@ -792,6 +794,11 @@ class GameInstance:
         """
         if self.game_state:
             game_state_dict = self.game_state.to_dict()
+            
+            # Add server timing information
+            game_state_dict["turn_duration_seconds"] = self.turn_duration_seconds
+            game_state_dict["max_turns"] = self.max_turns
+            
             await self.broadcast_to_bots(game_state_dict)
             await self.broadcast_to_viewers(game_state_dict)
     
