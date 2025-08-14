@@ -666,7 +666,7 @@ class GameInstance:
             move_animations = []
             unit_generation_data = []
             
-            # Get all valid movements for animation
+            # Get all valid movements for animation (simplified since no movement costs now)
             valid_movements = []
             for player_id, commands in self.turn_commands.items():
                 for command in commands:
@@ -676,15 +676,13 @@ class GameInstance:
                     ):
                         valid_movements.append(command)
                         
-                        # Record movement for animation
+                        # Record movement for animation (no cost calculation needed)
                         move_animations.append({
                             "player_id": command.player_id,
                             "from_vertex": command.from_vertex,
                             "to_vertex": command.to_vertex,
                             "units": command.units,
-                            "cost": self.game_engine._calculate_movement_cost(
-                                command.from_vertex, command.to_vertex
-                            )
+                            "cost": 0  # No movement costs in new system
                         })
             
             # Process the turn using the existing engine
@@ -693,29 +691,38 @@ class GameInstance:
             # Capture unit generation data by comparing before/after states
             for vertex in self.game_state.graph.vertices.values():
                 before = vertices_before[vertex.id]
-                
-                # Calculate expected units after movements but before generation
-                expected_after_moves = before["units"]
-                
-                # Subtract units that moved out
-                for move in move_animations:
-                    if move["from_vertex"] == vertex.id and move["player_id"] == before["controller"]:
-                        expected_after_moves -= (move["units"] + move["cost"])
-                
-                # Add units that moved in (after conflict resolution)
-                # This is approximated since conflict resolution is complex
                 current_controller = vertex.controller
+                
                 if current_controller is not None:
-                    # If vertex changed hands or gained units beyond movements, record generation
-                    units_generated = vertex.units - expected_after_moves
-                    if units_generated > 0:
-                        # This includes both successful attacks and unit generation
-                        # For animation purposes, we'll show the net increase
+                    # Calculate units that moved out from this vertex
+                    units_moved_out = 0
+                    for move in move_animations:
+                        if move["from_vertex"] == vertex.id and move["player_id"] == before["controller"]:
+                            units_moved_out += move["units"]
+                    
+                    # Expected units after movements but before generation and combat
+                    expected_after_moves = before["units"] - units_moved_out
+                    
+                    # If this vertex changed hands or gained significant units, record it
+                    if current_controller != before["controller"]:
+                        # Vertex changed hands - all current units are from combat
                         unit_generation_data.append({
                             "vertex_id": vertex.id,
                             "controller": current_controller,
-                            "units_added": vertex.weight if current_controller == before["controller"] else 0,
-                            "units_from_combat": max(0, units_generated - vertex.weight) if current_controller == before["controller"] else vertex.units
+                            "units_added": vertex.weight if vertex.weight > 0 else 0,  # Generation
+                            "units_from_combat": max(0, vertex.units - vertex.weight)  # Combat result
+                        })
+                    elif vertex.units > expected_after_moves:
+                        # Same controller, but gained units (generation + possibly combat)
+                        total_gained = vertex.units - expected_after_moves
+                        generation = vertex.weight if vertex.weight > 0 else 0
+                        combat_gain = max(0, total_gained - generation)
+                        
+                        unit_generation_data.append({
+                            "vertex_id": vertex.id,
+                            "controller": current_controller,
+                            "units_added": generation,
+                            "units_from_combat": combat_gain
                         })
                     elif current_controller == before["controller"] and vertex.weight > 0:
                         # Normal unit generation for unchanged controller
@@ -1337,354 +1344,6 @@ async def run_server(host: str = "localhost", port: int = 8765,
             })
         
         logger.info("Server shutdown complete")
-
-
-async def test_early_assignment_and_removal():
-    """
-    Test early vertex assignment and player removal during grace period.
-    """
-    async def bot_client(player_id: str, delay: float = 1, disconnect_after: float = None):
-        """
-        Simulate a bot client that connects and optionally disconnects.
-        
-        Args:
-            player_id: Unique identifier for this bot
-            delay: Delay before connecting
-            disconnect_after: If set, disconnect after this many seconds
-        """
-        await asyncio.sleep(delay)
-        
-        try:
-            uri = "ws://localhost:8765"
-            logger.info(f"[{player_id}] Connecting to {uri}")
-            
-            async with websockets.connect(uri) as websocket:
-                # Join as a bot
-                join_message = {
-                    "type": "join_as_bot",
-                    "player_id": player_id
-                }
-                await websocket.send(json.dumps(join_message))
-                logger.info(f"[{player_id}] Sent join request")
-                
-                # Wait for confirmation
-                message = await websocket.recv()
-                data = json.loads(message)
-                
-                if data.get("type") == "connection_confirmed":
-                    starting_vertex = data.get("starting_vertex")
-                    logger.info(f"[{player_id}] Confirmed, assigned vertex {starting_vertex}")
-                
-                # If set to disconnect, do so after specified time
-                if disconnect_after:
-                    await asyncio.sleep(disconnect_after)
-                    logger.info(f"[{player_id}] Disconnecting as planned")
-                    return
-                
-                # Otherwise wait for grace period or game start
-                while True:
-                    try:
-                        message = await asyncio.wait_for(websocket.recv(), timeout=30.0)
-                        data = json.loads(message)
-                        message_type = data.get("type")
-                        
-                        if message_type == "grace_period_started":
-                            duration = data.get("duration_seconds", 0)
-                            logger.info(f"[{player_id}] Grace period started: {duration}s")
-                            
-                        elif message_type == "grace_period_canceled":
-                            reason = data.get("reason")
-                            logger.info(f"[{player_id}] Grace period canceled: {reason}")
-                            break
-                            
-                        elif message_type == "game_state":
-                            game_status = data.get("game_status")
-                            if game_status == "active":
-                                logger.info(f"[{player_id}] Game started!")
-                                break
-                                
-                        elif message_type == "error":
-                            error_msg = data.get("message", "Unknown error")
-                            logger.warning(f"[{player_id}] Error: {error_msg}")
-                            
-                    except asyncio.TimeoutError:
-                        logger.warning(f"[{player_id}] Timeout waiting for server message")
-                        break
-                    except websockets.exceptions.ConnectionClosed:
-                        logger.info(f"[{player_id}] Connection closed by server")
-                        break
-                
-        except Exception as e:
-            logger.error(f"[{player_id}] Client error: {e}")
-    
-    # Test scenario: 3 players connect, 1 disconnects, grace period should be canceled
-    logger.info("=== Testing Early Assignment and Grace Period Cancellation ===")
-    
-    bot1_task = asyncio.create_task(bot_client("test_bot_1", delay=0.5))
-    bot2_task = asyncio.create_task(bot_client("test_bot_2", delay=1.0))
-    bot3_task = asyncio.create_task(bot_client("test_bot_3", delay=1.5, disconnect_after=3.0))  # Disconnects
-    
-    # Wait for all bots
-    try:
-        await asyncio.gather(bot1_task, bot2_task, bot3_task)
-        logger.info("=== Test completed ===")
-    except Exception as e:
-        logger.error(f"Test error: {e}")
-
-
-async def test_two_player_game():
-    """
-    Test a complete two-player game flow including connection, gameplay, and natural termination.
-    """
-    async def bot_client(player_id: str, delay: float = 1):
-        """
-        Simulate a bot client that connects, plays until game ends, and then disconnects.
-        
-        Args:
-            player_id: Unique identifier for this bot
-            delay: Delay before connecting (to simulate different connection times)
-        """
-        await asyncio.sleep(delay)
-        
-        try:
-            uri = "ws://localhost:8765"
-            logger.info(f"[{player_id}] Connecting to {uri}")
-            
-            async with websockets.connect(uri) as websocket:
-                # Join as a bot
-                join_message = {
-                    "type": "join_as_bot",
-                    "player_id": player_id
-                }
-                await websocket.send(json.dumps(join_message))
-                logger.info(f"[{player_id}] Sent join request")
-                
-                game_over = False
-                my_status = "active"
-                
-                while not game_over:
-                    try:
-                        # Wait for message from server with longer timeout for full game
-                        message = await asyncio.wait_for(websocket.recv(), timeout=60.0)
-                        data = json.loads(message)
-                        message_type = data.get("type")
-                        
-                        if message_type == "connection_confirmed":
-                            starting_vertex = data.get("starting_vertex")
-                            logger.info(f"[{player_id}] Successfully joined, assigned vertex {starting_vertex}")
-                            
-                        elif message_type == "grace_period_started":
-                            duration = data.get("duration_seconds", 0)
-                            logger.info(f"[{player_id}] Grace period started: {duration}s")
-                            
-                        elif message_type == "game_state":
-                            game_status = data.get("game_status")
-                            current_turn = data.get("turn", 0)
-                            
-                            # Check my current status
-                            players = data.get("players", [])
-                            for player in players:
-                                if player.get("id") == player_id:
-                                    my_status = player.get("status", "active")
-                                    break
-                            
-                            if game_status == "active":
-                                logger.info(f"[{player_id}] Turn {current_turn}, my status: {my_status}")
-                                
-                                # Only send commands if I'm still active
-                                if my_status == "active":
-                                    await asyncio.sleep(delay)
-                                    await send_strategic_commands(websocket, player_id, data)
-                                else:
-                                    logger.info(f"[{player_id}] Eliminated, not sending commands")
-                                    
-                            elif game_status == "ended":
-                                rankings = data.get("final_rankings", [])
-                                logger.info(f"[{player_id}] Game ended!")
-                                logger.info(f"[{player_id}] Final rankings: {rankings}")
-                                game_over = True
-                                
-                        elif message_type == "game_over":
-                            rankings = data.get("final_rankings", [])
-                            logger.info(f"[{player_id}] Game over message received!")
-                            logger.info(f"[{player_id}] Final rankings: {rankings}")
-                            game_over = True
-                            
-                        elif message_type == "error":
-                            error_msg = data.get("message", "Unknown error")
-                            logger.warning(f"[{player_id}] Error: {error_msg}")
-                            
-                    except asyncio.TimeoutError:
-                        logger.warning(f"[{player_id}] Timeout waiting for server message")
-                        break
-                    except websockets.exceptions.ConnectionClosed:
-                        logger.info(f"[{player_id}] Connection closed by server")
-                        break
-                
-                logger.info(f"[{player_id}] Game completed, disconnecting gracefully")
-                
-        except Exception as e:
-            logger.error(f"[{player_id}] Client error: {e}")
-    
-    async def send_strategic_commands(websocket, player_id: str, game_state: dict):
-        """
-        Send strategic movement commands based on current game state.
-        
-        Args:
-            websocket: WebSocket connection
-            player_id: ID of the player
-            game_state: Current game state data
-        """
-        try:
-            # Find vertices controlled by this player
-            vertices = game_state.get("graph", {}).get("vertices", [])
-            edges = game_state.get("graph", {}).get("edges", [])
-            
-            my_vertices = [v for v in vertices if v.get("controller") == player_id]
-            enemy_vertices = [v for v in vertices if v.get("controller") not in [player_id, None]]
-            neutral_vertices = [v for v in vertices if v.get("controller") is None]
-            
-            if not my_vertices:
-                logger.warning(f"[{player_id}] No controlled vertices found")
-                # Send empty command to advance turn
-                move_message = {"type": "move_command", "commands": []}
-                await websocket.send(json.dumps(move_message))
-                return
-            
-            logger.info(f"[{player_id}] I control {len(my_vertices)} vertices, {len(enemy_vertices)} enemy, {len(neutral_vertices)} neutral")
-            
-            # Build adjacency map for quick lookups
-            adjacency = {}
-            for edge in edges:
-                from_id = edge["from"]
-                to_id = edge["to"]
-                if from_id not in adjacency:
-                    adjacency[from_id] = []
-                adjacency[from_id].append(to_id)
-            
-            commands = []
-            
-            # Strategy: Prioritize attacking enemies, then expanding to neutrals
-            for vertex in my_vertices:
-                vertex_id = vertex["id"]
-                units = vertex["units"]
-                
-                if units <= 1:  # Keep at least 1 unit for defense
-                    continue
-                
-                adjacent_ids = adjacency.get(vertex_id, [])
-                if not adjacent_ids:
-                    continue
-                
-                # Find adjacent targets
-                adjacent_enemies = []
-                adjacent_neutrals = []
-                
-                for adj_id in adjacent_ids:
-                    adj_vertex = next((v for v in vertices if v["id"] == adj_id), None)
-                    if adj_vertex:
-                        if adj_vertex.get("controller") not in [player_id, None]:
-                            adjacent_enemies.append(adj_vertex)
-                        elif adj_vertex.get("controller") is None:
-                            adjacent_neutrals.append(adj_vertex)
-                
-                # Prioritize weak enemies we can defeat
-                for enemy in adjacent_enemies:
-                    enemy_units = enemy.get("units", 0)
-                    if units > enemy_units + 1:  # Can defeat and have units left
-                        units_to_send = min(enemy_units + 2, units - 1)  # Send enough to win + some extra
-                        commands.append({
-                            "from": vertex_id,
-                            "to": enemy["id"],
-                            "units": units_to_send
-                        })
-                        logger.info(f"[{player_id}] Attacking enemy vertex {enemy['id']} with {units_to_send} units")
-                        units -= units_to_send
-                        break
-                
-                # If no good enemy targets, expand to neutrals
-                if units > 1 and not any(cmd["from"] == vertex_id for cmd in commands):
-                    for neutral in adjacent_neutrals:
-                        neutral_weight = neutral.get("weight", 1)
-                        if units > neutral_weight + 1:  # Can afford the cost
-                            units_to_send = min(2, units - 1)  # Send small expansion force
-                            commands.append({
-                                "from": vertex_id,
-                                "to": neutral["id"],
-                                "units": units_to_send
-                            })
-                            logger.info(f"[{player_id}] Expanding to neutral vertex {neutral['id']} with {units_to_send} units")
-                            break
-            
-            # Send commands or empty list to advance turn
-            move_message = {
-                "type": "move_command",
-                "commands": commands
-            }
-            await websocket.send(json.dumps(move_message))
-            
-            if commands:
-                logger.info(f"[{player_id}] Sent {len(commands)} strategic commands")
-            else:
-                logger.info(f"[{player_id}] No viable moves, sent empty command list")
-                
-        except Exception as e:
-            logger.error(f"[{player_id}] Error sending commands: {e}")
-            # Send empty command to avoid blocking the game
-            move_message = {"type": "move_command", "commands": []}
-            await websocket.send(json.dumps(move_message))
-    
-    # Start both bot clients with slight delay
-    logger.info("=== Starting Complete Two-Player Game Test ===")
-    
-    bot1_task = asyncio.create_task(bot_client("test_bot_1", delay=0.5))
-    bot2_task = asyncio.create_task(bot_client("test_bot_2", delay=1.0))
-    
-    # Wait for both bots to complete
-    try:
-        await asyncio.gather(bot1_task, bot2_task)
-        logger.info("=== Complete Two-Player Game Test Finished ===")
-    except Exception as e:
-        logger.error(f"Test error: {e}")
-
-
-async def test_client():
-    """
-    Simple test client to verify server connectivity.
-    """
-    try:
-        uri = "ws://localhost:8765"
-        logger.info(f"Connecting test client to {uri}")
-        
-        async with websockets.connect(uri) as websocket:
-            # Join as a bot
-            join_message = {
-                "type": "join_as_bot",
-                "player_id": "test_bot_1"
-            }
-            await websocket.send(json.dumps(join_message))
-            
-            # Wait for confirmation
-            response = await websocket.recv()
-            data = json.loads(response)
-            logger.info(f"Server response: {data}")
-            
-            # Send a test command (will fail since game isn't started, but tests message routing)
-            test_command = {
-                "type": "move_command",
-                "commands": [
-                    {"from": 0, "to": 1, "units": 1}
-                ]
-            }
-            await websocket.send(json.dumps(test_command))
-            
-            # Wait for response
-            response = await websocket.recv()
-            data = json.loads(response)
-            logger.info(f"Command response: {data}")
-            
-    except Exception as e:
-        logger.error(f"Test client error: {e}")
 
 
 if __name__ == "__main__":
