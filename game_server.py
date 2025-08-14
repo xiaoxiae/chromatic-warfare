@@ -44,18 +44,22 @@ class GameServer:
         self.viewer_connections: Set[WebSocketServerProtocol] = set()
         self.connection_to_player: Dict[WebSocketServerProtocol, str] = {}  # websocket -> player_id
         
-        # Game state
-        self.game_state: Optional[GameState] = None
+        # Game state - initialize immediately with grid
+        self.game_state = GameState(max_turns=self.max_turns)
+        self.game_state.graph.generate_grid_graph(self.grid_width, self.grid_height)
         self.game_engine: Optional[GameEngine] = None
         self.game_started = False
         
-        # Grace period for additional connections
+        # Grace period management
         self.grace_period_seconds = 15
         self.minimum_players = 2
+        self.grace_period_task: Optional[asyncio.Task] = None
         
         # Turn management
         self.turn_commands: Dict[str, list] = {}  # player_id -> list of commands
         self.turn_timeout_seconds = 30
+        self.turn_duration_seconds = 1.0  # Duration of each turn for consistent viewing
+        self.turn_timer_task: Optional[asyncio.Task] = None
     
     async def add_bot_connection(self, websocket: WebSocketServerProtocol, player_id: str) -> bool:
         """
@@ -77,28 +81,117 @@ class GameServer:
                 await self.send_error(websocket, f"Player {player_id} already connected")
                 return False
             
+            # Check if we have enough uncontrolled vertices for this player
+            uncontrolled_vertices = self.game_state.graph.get_uncontrolled_vertices()
+            if len(uncontrolled_vertices) == 0:
+                await self.send_error(websocket, "No available starting positions")
+                return False
+            
             # Add connection
             self.bot_connections[player_id] = websocket
             self.connection_to_player[websocket] = player_id
             
-            logger.info(f"Bot {player_id} connected. Total bots: {len(self.bot_connections)}")
+            # Add player to game state and assign starting vertex immediately
+            self.game_state.add_player(player_id)
+            
+            # Assign a random starting vertex
+            import random
+            starting_vertex = random.choice(uncontrolled_vertices)
+            starting_vertex.controller = player_id
+            starting_vertex.units = self.starting_units
+            
+            # Update player's total units
+            self.game_state.players[player_id].update_total_units(self.game_state.graph)
+            
+            logger.info(f"Bot {player_id} connected and assigned vertex {starting_vertex.id}. Total bots: {len(self.bot_connections)}")
             
             # Send connection confirmation
             await self.send_to_websocket(websocket, {
                 "type": "connection_confirmed",
                 "player_id": player_id,
-                "message": "Successfully connected to game server"
+                "starting_vertex": starting_vertex.id,
+                "message": f"Successfully connected and assigned starting vertex {starting_vertex.id}"
             })
             
-            # Check if we can start the game
+            # Broadcast updated game state to all clients
+            await self.broadcast_game_state()
+            
+            # Check if we can start the grace period
             if len(self.bot_connections) >= self.minimum_players and not self.game_started:
-                asyncio.create_task(self.start_grace_period())
+                if self.grace_period_task is None or self.grace_period_task.done():
+                    self.grace_period_task = asyncio.create_task(self.start_grace_period())
             
             return True
             
         except Exception as e:
             logger.error(f"Error adding bot connection for {player_id}: {e}")
             return False
+    
+    async def remove_player(self, player_id: str) -> bool:
+        """
+        Remove a player from the game during the grace period.
+        
+        Args:
+            player_id: ID of the player to remove
+            
+        Returns:
+            True if player was removed successfully, False otherwise
+        """
+        try:
+            if self.game_started:
+                logger.warning(f"Cannot remove player {player_id} - game has already started")
+                return False
+            
+            if player_id not in self.bot_connections:
+                logger.warning(f"Player {player_id} not found in connections")
+                return False
+            
+            # Get the player's controlled vertices and make them neutral
+            if player_id in self.game_state.players:
+                controlled_vertices = self.game_state.graph.get_vertices_controlled_by_player(player_id)
+                for vertex in controlled_vertices:
+                    vertex.controller = None
+                    vertex.units = 0
+                
+                # Remove player from game state
+                del self.game_state.players[player_id]
+            
+            # Remove from connection tracking
+            websocket = self.bot_connections[player_id]
+            del self.bot_connections[player_id]
+            if websocket in self.connection_to_player:
+                del self.connection_to_player[websocket]
+            
+            logger.info(f"Player {player_id} removed during grace period. Remaining players: {len(self.bot_connections)}")
+            
+            # Check if we still have enough players
+            if len(self.bot_connections) < self.minimum_players:
+                await self.cancel_grace_period()
+            
+            # Broadcast updated game state
+            await self.broadcast_game_state()
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error removing player {player_id}: {e}")
+            return False
+    
+    async def cancel_grace_period(self) -> None:
+        """
+        Cancel the grace period if there are not enough players.
+        """
+        if self.grace_period_task and not self.grace_period_task.done():
+            self.grace_period_task.cancel()
+            logger.info(f"Grace period canceled - not enough players ({len(self.bot_connections)}/{self.minimum_players})")
+            
+            # Notify remaining players
+            await self.broadcast_to_bots({
+                "type": "grace_period_canceled",
+                "reason": "insufficient_players",
+                "current_players": len(self.bot_connections),
+                "minimum_required": self.minimum_players
+            })
     
     async def add_viewer_connection(self, websocket: WebSocketServerProtocol) -> bool:
         """
@@ -114,9 +207,8 @@ class GameServer:
             self.viewer_connections.add(websocket)
             logger.info(f"Viewer connected. Total viewers: {len(self.viewer_connections)}")
             
-            # Send current game state if game is active
-            if self.game_state:
-                await self.send_to_websocket(websocket, self.game_state.to_dict())
+            # Send current game state
+            await self.send_to_websocket(websocket, self.game_state.to_dict())
             
             return True
             
@@ -136,21 +228,27 @@ class GameServer:
             if websocket in self.viewer_connections:
                 self.viewer_connections.discard(websocket)
                 logger.info(f"Viewer disconnected. Total viewers: {len(self.viewer_connections)}")
+                return
             
             # Remove from bots
             if websocket in self.connection_to_player:
                 player_id = self.connection_to_player[websocket]
-                del self.connection_to_player[websocket]
                 
-                if player_id in self.bot_connections:
-                    del self.bot_connections[player_id]
-                    logger.info(f"Bot {player_id} disconnected. Total bots: {len(self.bot_connections)}")
+                if not self.game_started:
+                    # During grace period, remove the player completely
+                    await self.remove_player(player_id)
+                else:
+                    # During game, just mark as disconnected
+                    del self.connection_to_player[websocket]
                     
-                    # Update player status in game if game is active
-                    if self.game_state and player_id in self.game_state.players:
-                        self.game_state.players[player_id].status = PlayerStatus.DISCONNECTED
-                        # Use asyncio.create_task to avoid blocking during iteration
-                        asyncio.create_task(self.broadcast_game_state())
+                    if player_id in self.bot_connections:
+                        del self.bot_connections[player_id]
+                        logger.info(f"Bot {player_id} disconnected during game. Total bots: {len(self.bot_connections)}")
+                        
+                        # Update player status in game
+                        if player_id in self.game_state.players:
+                            self.game_state.players[player_id].status = PlayerStatus.DISCONNECTED
+                            asyncio.create_task(self.broadcast_game_state())
                         
         except Exception as e:
             logger.error(f"Error removing connection: {e}")
@@ -334,12 +432,7 @@ class GameServer:
             
             logger.info(f"Received {len(commands)} commands from {player_id}")
             
-            # Check if all active players have submitted commands
-            active_players = [p.id for p in self.game_state.players.values() 
-                            if p.status == PlayerStatus.ACTIVE]
-            
-            if all(pid in self.turn_commands for pid in active_players):
-                await self.process_turn()
+            # Commands are now processed on a timer, not when all players submit
                 
         except Exception as e:
             logger.error(f"Error handling move command: {e}")
@@ -349,21 +442,31 @@ class GameServer:
         """
         Start the grace period for additional players to join.
         """
-        if self.game_started:
-            return
-        
-        logger.info(f"Starting {self.grace_period_seconds} second grace period for additional players")
-        
-        await self.broadcast_to_bots({
-            "type": "grace_period_started",
-            "duration_seconds": self.grace_period_seconds,
-            "current_players": len(self.bot_connections)
-        })
-        
-        await asyncio.sleep(self.grace_period_seconds)
-        
-        if not self.game_started and len(self.bot_connections) >= self.minimum_players:
-            await self.start_game()
+        try:
+            if self.game_started:
+                return
+            
+            logger.info(f"Starting {self.grace_period_seconds} second grace period for additional players")
+            
+            await self.broadcast_to_bots({
+                "type": "grace_period_started",
+                "duration_seconds": self.grace_period_seconds,
+                "current_players": len(self.bot_connections)
+            })
+            
+            await asyncio.sleep(self.grace_period_seconds)
+            
+            # Check again if we still have enough players and game hasn't started
+            if not self.game_started and len(self.bot_connections) >= self.minimum_players:
+                await self.start_game()
+            else:
+                logger.info("Grace period ended but conditions not met for game start")
+                
+        except asyncio.CancelledError:
+            logger.info("Grace period was cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Error in grace period: {e}")
     
     async def start_game(self) -> None:
         """
@@ -373,33 +476,57 @@ class GameServer:
             if self.game_started:
                 return
             
+            if len(self.bot_connections) < self.minimum_players:
+                logger.warning(f"Cannot start game - insufficient players ({len(self.bot_connections)}/{self.minimum_players})")
+                return
+            
             self.game_started = True
             logger.info(f"Starting game with {len(self.bot_connections)} players")
             
-            # Initialize game state
-            self.game_state = GameState(max_turns=self.max_turns)
-            self.game_state.graph.generate_grid_graph(self.grid_width, self.grid_height)
+            # Update game status and turn
+            self.game_state.status = self.game_state.status.__class__.ACTIVE  # Set to ACTIVE
+            self.game_state.current_turn = 1
             
-            # Add players
-            for player_id in self.bot_connections.keys():
-                self.game_state.add_player(player_id)
-            
-            # Start the game
-            self.game_state.start_game(starting_units=self.starting_units)
+            # Initialize game engine
             self.game_engine = GameEngine(self.game_state)
+            
+            # Start the turn timer
+            self.turn_timer_task = asyncio.create_task(self.turn_timer_loop())
             
             # Broadcast initial game state
             await self.broadcast_game_state()
             
-            logger.info(f"Game started on turn {self.game_state.current_turn}")
+            logger.info(f"Game started on turn {self.game_state.current_turn} with {self.turn_duration_seconds}s turn duration")
             
         except Exception as e:
             logger.error(f"Error starting game: {e}")
             self.game_started = False
     
+    async def turn_timer_loop(self) -> None:
+        """
+        Main turn timer loop that processes turns at regular intervals.
+        """
+        try:
+            while not self.game_state.status.value == "ended":
+                # Wait for the turn duration
+                await asyncio.sleep(self.turn_duration_seconds)
+                
+                # Process the current turn
+                await self.process_turn()
+                
+                # Check if game is over
+                if self.game_state.status.value == "ended":
+                    break
+                    
+        except asyncio.CancelledError:
+            logger.info("Turn timer loop cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Error in turn timer loop: {e}")
+    
     async def process_turn(self) -> None:
         """
-        Process all commands for the current turn.
+        Process all commands for the current turn and generate detailed turn data for animations.
         """
         try:
             if not self.game_engine or not self.game_state:
@@ -407,13 +534,101 @@ class GameServer:
             
             logger.info(f"Processing turn {self.game_state.current_turn}")
             
-            # Process the turn
+            # Capture state before turn processing for animation data
+            vertices_before = {}
+            for vertex in self.game_state.graph.vertices.values():
+                vertices_before[vertex.id] = {
+                    "controller": vertex.controller,
+                    "units": vertex.units
+                }
+            
+            # Process movements and capture move data
+            move_animations = []
+            unit_generation_data = []
+            
+            # Get all valid movements for animation
+            valid_movements = []
+            for player_id, commands in self.turn_commands.items():
+                for command in commands:
+                    if self.game_engine.process_movement_command(
+                        command.player_id, command.from_vertex, 
+                        command.to_vertex, command.units
+                    ):
+                        valid_movements.append(command)
+                        
+                        # Record movement for animation
+                        move_animations.append({
+                            "player_id": command.player_id,
+                            "from_vertex": command.from_vertex,
+                            "to_vertex": command.to_vertex,
+                            "units": command.units,
+                            "cost": self.game_engine._calculate_movement_cost(
+                                command.from_vertex, command.to_vertex
+                            )
+                        })
+            
+            # Process the turn using the existing engine
             turn_result = self.game_engine.process_turn(self.turn_commands)
+            
+            # Capture unit generation data by comparing before/after states
+            for vertex in self.game_state.graph.vertices.values():
+                before = vertices_before[vertex.id]
+                
+                # Calculate expected units after movements but before generation
+                expected_after_moves = before["units"]
+                
+                # Subtract units that moved out
+                for move in move_animations:
+                    if move["from_vertex"] == vertex.id and move["player_id"] == before["controller"]:
+                        expected_after_moves -= (move["units"] + move["cost"])
+                
+                # Add units that moved in (after conflict resolution)
+                # This is approximated since conflict resolution is complex
+                current_controller = vertex.controller
+                if current_controller is not None:
+                    # If vertex changed hands or gained units beyond movements, record generation
+                    units_generated = vertex.units - expected_after_moves
+                    if units_generated > 0:
+                        # This includes both successful attacks and unit generation
+                        # For animation purposes, we'll show the net increase
+                        unit_generation_data.append({
+                            "vertex_id": vertex.id,
+                            "controller": current_controller,
+                            "units_added": vertex.weight if current_controller == before["controller"] else 0,
+                            "units_from_combat": max(0, units_generated - vertex.weight) if current_controller == before["controller"] else vertex.units
+                        })
+                    elif current_controller == before["controller"] and vertex.weight > 0:
+                        # Normal unit generation for unchanged controller
+                        unit_generation_data.append({
+                            "vertex_id": vertex.id,
+                            "controller": current_controller,
+                            "units_added": vertex.weight,
+                            "units_from_combat": 0
+                        })
             
             # Clear commands for next turn
             self.turn_commands.clear()
             
-            # Broadcast updated game state
+            # Create detailed turn result for animations
+            detailed_turn_result = {
+                "type": "turn_processed",
+                "turn": self.game_state.current_turn,
+                "move_animations": move_animations,
+                "unit_generation": unit_generation_data,
+                "eliminations": turn_result["eliminations"],
+                "game_over": turn_result["game_over"],
+                "winner": turn_result.get("winner")
+            }
+            
+            # Broadcast detailed turn data first (for animations)
+            logger.info(f"Broadcasting turn data: {len(move_animations)} moves, {len(unit_generation_data)} generations")
+            await self.broadcast_to_viewers(detailed_turn_result)
+            await self.broadcast_to_bots(detailed_turn_result)
+            
+            # Small delay to ensure turn_processed is handled before game_state
+            await asyncio.sleep(0.05)
+            
+            # Then broadcast updated game state
             await self.broadcast_game_state()
             
             # Log turn results
@@ -422,10 +637,16 @@ class GameServer:
             
             if turn_result["game_over"]:
                 logger.info(f"Game over! Winners: {turn_result['winner']}")
+                
+                # Stop the turn timer
+                if self.turn_timer_task and not self.turn_timer_task.done():
+                    self.turn_timer_task.cancel()
+                    
                 await self.broadcast_to_bots({
                     "type": "game_over",
                     "winner": turn_result["winner"],
-                    "turn": self.game_state.current_turn
+                    "turn": self.game_state.current_turn,
+                    "final_rankings": self.game_state.final_rankings
                 })
             
         except Exception as e:
@@ -462,7 +683,8 @@ class GameServer:
 
 
 async def run_server(host: str = "localhost", port: int = 8765, 
-                    grid_width: int = 5, grid_height: int = 5) -> None:
+                    grid_width: int = 5, grid_height: int = 5, 
+                    turn_duration: float = 1.0) -> None:
     """
     Run the game server.
     
@@ -471,15 +693,112 @@ async def run_server(host: str = "localhost", port: int = 8765,
         port: Port to listen on
         grid_width: Width of the game grid
         grid_height: Height of the game grid
+        turn_duration: Duration of each turn in seconds
     """
     server = GameServer(grid_width=grid_width, grid_height=grid_height)
+    server.turn_duration_seconds = turn_duration
     
     logger.info(f"Starting game server on {host}:{port}")
     logger.info(f"Grid size: {grid_width}x{grid_height}")
+    logger.info(f"Turn duration: {turn_duration}s")
+    logger.info(f"Grid generated with {len(server.game_state.graph.vertices)} vertices")
     logger.info(f"Waiting for at least {server.minimum_players} bot connections...")
     
     async with websockets.serve(server.handle_client, host, port):
         await asyncio.Future()  # Run forever
+
+
+async def test_early_assignment_and_removal():
+    """
+    Test early vertex assignment and player removal during grace period.
+    """
+    async def bot_client(player_id: str, delay: float = 1, disconnect_after: float = None):
+        """
+        Simulate a bot client that connects and optionally disconnects.
+        
+        Args:
+            player_id: Unique identifier for this bot
+            delay: Delay before connecting
+            disconnect_after: If set, disconnect after this many seconds
+        """
+        await asyncio.sleep(delay)
+        
+        try:
+            uri = "ws://localhost:8765"
+            logger.info(f"[{player_id}] Connecting to {uri}")
+            
+            async with websockets.connect(uri) as websocket:
+                # Join as a bot
+                join_message = {
+                    "type": "join_as_bot",
+                    "player_id": player_id
+                }
+                await websocket.send(json.dumps(join_message))
+                logger.info(f"[{player_id}] Sent join request")
+                
+                # Wait for confirmation
+                message = await websocket.recv()
+                data = json.loads(message)
+                
+                if data.get("type") == "connection_confirmed":
+                    starting_vertex = data.get("starting_vertex")
+                    logger.info(f"[{player_id}] Confirmed, assigned vertex {starting_vertex}")
+                
+                # If set to disconnect, do so after specified time
+                if disconnect_after:
+                    await asyncio.sleep(disconnect_after)
+                    logger.info(f"[{player_id}] Disconnecting as planned")
+                    return
+                
+                # Otherwise wait for grace period or game start
+                while True:
+                    try:
+                        message = await asyncio.wait_for(websocket.recv(), timeout=30.0)
+                        data = json.loads(message)
+                        message_type = data.get("type")
+                        
+                        if message_type == "grace_period_started":
+                            duration = data.get("duration_seconds", 0)
+                            logger.info(f"[{player_id}] Grace period started: {duration}s")
+                            
+                        elif message_type == "grace_period_canceled":
+                            reason = data.get("reason")
+                            logger.info(f"[{player_id}] Grace period canceled: {reason}")
+                            break
+                            
+                        elif message_type == "game_state":
+                            game_status = data.get("game_status")
+                            if game_status == "active":
+                                logger.info(f"[{player_id}] Game started!")
+                                break
+                                
+                        elif message_type == "error":
+                            error_msg = data.get("message", "Unknown error")
+                            logger.warning(f"[{player_id}] Error: {error_msg}")
+                            
+                    except asyncio.TimeoutError:
+                        logger.warning(f"[{player_id}] Timeout waiting for server message")
+                        break
+                    except websockets.exceptions.ConnectionClosed:
+                        logger.info(f"[{player_id}] Connection closed by server")
+                        break
+                
+        except Exception as e:
+            logger.error(f"[{player_id}] Client error: {e}")
+    
+    # Test scenario: 3 players connect, 1 disconnects, grace period should be canceled
+    logger.info("=== Testing Early Assignment and Grace Period Cancellation ===")
+    
+    bot1_task = asyncio.create_task(bot_client("test_bot_1", delay=0.5))
+    bot2_task = asyncio.create_task(bot_client("test_bot_2", delay=1.0))
+    bot3_task = asyncio.create_task(bot_client("test_bot_3", delay=1.5, disconnect_after=3.0))  # Disconnects
+    
+    # Wait for all bots
+    try:
+        await asyncio.gather(bot1_task, bot2_task, bot3_task)
+        logger.info("=== Test completed ===")
+    except Exception as e:
+        logger.error(f"Test error: {e}")
 
 
 async def test_two_player_game():
@@ -520,7 +839,8 @@ async def test_two_player_game():
                         message_type = data.get("type")
                         
                         if message_type == "connection_confirmed":
-                            logger.info(f"[{player_id}] Successfully joined game")
+                            starting_vertex = data.get("starting_vertex")
+                            logger.info(f"[{player_id}] Successfully joined, assigned vertex {starting_vertex}")
                             
                         elif message_type == "grace_period_started":
                             duration = data.get("duration_seconds", 0)
@@ -740,6 +1060,165 @@ async def test_client():
         logger.error(f"Test client error: {e}")
 
 
+async def test_periodic_turns():
+    """
+    Test the new periodic turn system with faster turns for demonstration.
+    """
+    async def bot_client(player_id: str, delay: float = 1):
+        """
+        Simulate a bot client with faster command submission for periodic turn testing.
+        """
+        await asyncio.sleep(delay)
+        
+        try:
+            uri = "ws://localhost:8765"
+            logger.info(f"[{player_id}] Connecting to {uri}")
+            
+            async with websockets.connect(uri) as websocket:
+                # Join as a bot
+                join_message = {
+                    "type": "join_as_bot",
+                    "player_id": player_id
+                }
+                await websocket.send(json.dumps(join_message))
+                logger.info(f"[{player_id}] Sent join request")
+                
+                game_over = False
+                turn_count = 0
+                
+                while not game_over and turn_count < 20:  # Limit for demo
+                    try:
+                        message = await asyncio.wait_for(websocket.recv(), timeout=10.0)
+                        data = json.loads(message)
+                        message_type = data.get("type")
+                        
+                        if message_type == "connection_confirmed":
+                            starting_vertex = data.get("starting_vertex")
+                            logger.info(f"[{player_id}] Confirmed, assigned vertex {starting_vertex}")
+                            
+                        elif message_type == "grace_period_started":
+                            duration = data.get("duration_seconds", 0)
+                            logger.info(f"[{player_id}] Grace period: {duration}s")
+                            
+                        elif message_type == "turn_processed":
+                            turn = data.get("turn")
+                            moves = data.get("move_animations", [])
+                            generation = data.get("unit_generation", [])
+                            logger.info(f"[{player_id}] Turn {turn} processed: {len(moves)} moves, {len(generation)} generations")
+                            
+                        elif message_type == "game_state":
+                            game_status = data.get("game_status")
+                            current_turn = data.get("turn", 0)
+                            
+                            if game_status == "active":
+                                turn_count = current_turn
+                                logger.info(f"[{player_id}] Turn {current_turn}")
+                                
+                                # Send commands quickly for periodic turn testing
+                                await send_quick_commands(websocket, player_id, data)
+                                    
+                            elif game_status == "ended":
+                                winner = data.get("winner", [])
+                                logger.info(f"[{player_id}] Game ended! Winners: {winner}")
+                                game_over = True
+                                
+                        elif message_type == "game_over":
+                            winner = data.get("winner", [])
+                            logger.info(f"[{player_id}] Game over! Winners: {winner}")
+                            game_over = True
+                            
+                    except asyncio.TimeoutError:
+                        logger.warning(f"[{player_id}] Timeout - continuing")
+                        continue
+                    except websockets.exceptions.ConnectionClosed:
+                        logger.info(f"[{player_id}] Connection closed")
+                        break
+                
+                logger.info(f"[{player_id}] Test completed after {turn_count} turns")
+                
+        except Exception as e:
+            logger.error(f"[{player_id}] Client error: {e}")
+    
+    async def send_quick_commands(websocket, player_id: str, game_state: dict):
+        """Send simple commands quickly for testing periodic turns."""
+        try:
+            vertices = game_state.get("graph", {}).get("vertices", [])
+            edges = game_state.get("graph", {}).get("edges", [])
+            
+            my_vertices = [v for v in vertices if v.get("controller") == player_id]
+            
+            if not my_vertices:
+                # Send empty command
+                move_message = {"type": "move_command", "commands": []}
+                await websocket.send(json.dumps(move_message))
+                return
+            
+            # Build adjacency map
+            adjacency = {}
+            for edge in edges:
+                from_id = edge["from"]
+                to_id = edge["to"]
+                if from_id not in adjacency:
+                    adjacency[from_id] = []
+                adjacency[from_id].append(to_id)
+            
+            commands = []
+            
+            # Simple strategy: attack any adjacent enemy or expand to neutral
+            for vertex in my_vertices[:2]:  # Limit to 2 vertices to keep it simple
+                vertex_id = vertex["id"]
+                units = vertex["units"]
+                
+                if units <= 1:
+                    continue
+                
+                adjacent_ids = adjacency.get(vertex_id, [])
+                if not adjacent_ids:
+                    continue
+                
+                # Find a target
+                for adj_id in adjacent_ids:
+                    adj_vertex = next((v for v in vertices if v["id"] == adj_id), None)
+                    if adj_vertex and adj_vertex.get("controller") != player_id:
+                        # Attack or expand
+                        units_to_send = min(2, units - 1)
+                        if units_to_send > 0:
+                            commands.append({
+                                "from": vertex_id,
+                                "to": adj_id,
+                                "units": units_to_send
+                            })
+                            break
+            
+            # Send commands
+            move_message = {
+                "type": "move_command", 
+                "commands": commands
+            }
+            await websocket.send(json.dumps(move_message))
+            
+            if commands:
+                logger.info(f"[{player_id}] Sent {len(commands)} quick commands")
+                
+        except Exception as e:
+            logger.error(f"[{player_id}] Error sending quick commands: {e}")
+            # Send empty command to avoid blocking
+            move_message = {"type": "move_command", "commands": []}
+            await websocket.send(json.dumps(move_message))
+    
+    # Start test with faster turns
+    logger.info("=== Testing Periodic Turn System (0.5s turns) ===")
+    
+    bot1_task = asyncio.create_task(bot_client("fast_bot_1", delay=0.3))
+    bot2_task = asyncio.create_task(bot_client("fast_bot_2", delay=0.6))
+    
+    try:
+        await asyncio.gather(bot1_task, bot2_task)
+        logger.info("=== Periodic Turn Test Completed ===")
+    except Exception as e:
+        logger.error(f"Test error: {e}")
+
+
 if __name__ == "__main__":
     import sys
     
@@ -749,6 +1228,18 @@ if __name__ == "__main__":
     elif len(sys.argv) > 1 and sys.argv[1] == "test_game":
         # Run two-player game test
         asyncio.run(test_two_player_game())
+    elif len(sys.argv) > 1 and sys.argv[1] == "test_removal":
+        # Run early assignment and removal test
+        asyncio.run(test_early_assignment_and_removal())
+    elif len(sys.argv) > 1 and sys.argv[1] == "test_periodic":
+        # Run periodic turn test
+        asyncio.run(test_periodic_turns())
+    elif len(sys.argv) > 1 and sys.argv[1] == "fast":
+        # Run server with fast turns for testing
+        try:
+            asyncio.run(run_server(turn_duration=0.5))
+        except KeyboardInterrupt:
+            logger.info("Fast server shutting down...")
     else:
         # Run server
         try:

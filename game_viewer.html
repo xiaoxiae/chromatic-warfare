@@ -191,6 +191,11 @@
             font-weight: 500;
         }
 
+        .log-entry.turn-data {
+            color: #fbbf24;
+            font-weight: 500;
+        }
+
         .connection-status {
             position: absolute;
             top: 20px;
@@ -339,9 +344,194 @@
                 ];
                 this.colorIndex = 0;
                 
+                // Animation system
+                this.isAnimating = false;
+                this.animationData = null;
+                this.turnDuration = 1000; // Default 1 second, will be updated
+                this.lastRenderTime = 0;
+                this.animationStartTime = 0;
+                this.currentPhase = 'idle'; // 'movement', 'state_change', 'generation', 'idle'
+                
+                // Animation states
+                this.displayedVertices = new Map(); // Current displayed state
+                this.targetVertices = new Map(); // Target state after animations
+                this.movingUnits = []; // Units currently animating
+                
                 this.setupCanvas();
                 this.connectToServer();
                 this.setupResizeHandler();
+                this.startRenderLoop();
+            }
+
+            startRenderLoop() {
+                const render = (timestamp) => {
+                    this.lastRenderTime = timestamp;
+                    this.updateAnimations(timestamp);
+                    this.renderFrame();
+                    requestAnimationFrame(render);
+                };
+                requestAnimationFrame(render);
+            }
+
+            updateAnimations(timestamp) {
+                if (!this.isAnimating || !this.animationData) {
+                    return;
+                }
+                
+                const elapsed = timestamp - this.animationStartTime;
+                const progress = elapsed / this.turnDuration;
+                
+                // Phase timings (as percentages of turn duration)
+                const movementEnd = 0.20;
+                const stateChangeEnd = 0.30;
+                const generationEnd = 0.50;
+                
+                console.log('Animation progress: ' + (progress * 100).toFixed(1) + '%, phase: ' + this.currentPhase);
+                
+                if (progress <= movementEnd) {
+                    this.currentPhase = 'movement';
+                    this.updateMovementAnimation(progress / movementEnd);
+                } else if (progress <= stateChangeEnd) {
+                    if (this.currentPhase === 'movement') {
+                        console.log('Finishing movement phase');
+                        this.finishMovementPhase();
+                        this.currentPhase = 'state_change';
+                    }
+                    this.updateStateChangeAnimation((progress - movementEnd) / (stateChangeEnd - movementEnd));
+                } else if (progress <= generationEnd) {
+                    if (this.currentPhase === 'state_change') {
+                        console.log('Finishing state change phase');
+                        this.finishStateChangePhase();
+                        this.currentPhase = 'generation';
+                    }
+                    this.updateGenerationAnimation((progress - stateChangeEnd) / (generationEnd - stateChangeEnd));
+                } else {
+                    // Animation complete
+                    console.log('Animation complete');
+                    this.finishGenerationPhase();
+                    this.finishAnimation();
+                }
+            }
+
+            updateMovementAnimation(progress) {
+                console.log('Movement animation progress: ' + (progress * 100).toFixed(1) + '%');
+                
+                // Update positions of moving units
+                this.movingUnits.forEach(unit => {
+                    const easedProgress = this.easeInOutCubic(progress);
+                    unit.currentX = unit.startX + (unit.endX - unit.startX) * easedProgress;
+                    unit.currentY = unit.startY + (unit.endY - unit.startY) * easedProgress;
+                    unit.alpha = 1.0 - (progress * 0.3); // Slightly fade during movement
+                });
+            }
+
+            updateStateChangeAnimation(progress) {
+                // Animate color transitions for vertices that changed ownership
+                const easedProgress = this.easeInOutCubic(progress);
+                
+                this.displayedVertices.forEach((displayVertex, vertexId) => {
+                    const targetVertex = this.targetVertices.get(vertexId);
+                    if (!targetVertex) return;
+                    
+                    // Animate controller change
+                    if (displayVertex.controller !== targetVertex.controller) {
+                        displayVertex.controllerTransition = easedProgress;
+                        displayVertex.newController = targetVertex.controller;
+                    }
+                });
+            }
+
+            updateGenerationAnimation(progress) {
+                // Animate unit count increases
+                const easedProgress = this.easeInOutCubic(progress);
+                
+                if (this.animationData && this.animationData.unit_generation) {
+                    this.animationData.unit_generation.forEach(genData => {
+                        const displayVertex = this.displayedVertices.get(genData.vertex_id);
+                        const targetVertex = this.targetVertices.get(genData.vertex_id);
+                        
+                        if (displayVertex && targetVertex) {
+                            const startUnits = displayVertex.baseUnits || displayVertex.units;
+                            const endUnits = targetVertex.units;
+                            displayVertex.units = Math.floor(startUnits + (endUnits - startUnits) * easedProgress);
+                            
+                            // Add pulsing effect for generating vertices
+                            displayVertex.generationPulse = Math.sin(progress * Math.PI * 3) * 0.3 + 1.0;
+                        }
+                    });
+                }
+            }
+
+            finishMovementPhase() {
+                // Clear moving units and update source vertices
+                this.movingUnits.forEach(unit => {
+                    const sourceVertex = this.displayedVertices.get(unit.fromVertex);
+                    if (sourceVertex) {
+                        sourceVertex.units = Math.max(0, sourceVertex.units - unit.units - unit.cost);
+                    }
+                });
+                this.movingUnits = [];
+            }
+
+            finishStateChangePhase() {
+                // Apply all controller changes
+                this.displayedVertices.forEach((displayVertex, vertexId) => {
+                    const targetVertex = this.targetVertices.get(vertexId);
+                    if (targetVertex && displayVertex.newController !== undefined) {
+                        displayVertex.controller = displayVertex.newController;
+                        displayVertex.controllerTransition = undefined;
+                        displayVertex.newController = undefined;
+                    }
+                });
+            }
+
+            finishGenerationPhase() {
+                // Ensure all units are at final values
+                this.displayedVertices.forEach((displayVertex, vertexId) => {
+                    const targetVertex = this.targetVertices.get(vertexId);
+                    if (targetVertex) {
+                        displayVertex.units = targetVertex.units;
+                        displayVertex.controller = targetVertex.controller;
+                        displayVertex.generationPulse = undefined;
+                        displayVertex.baseUnits = undefined;
+                    }
+                });
+            }
+
+            finishAnimation() {
+                this.isAnimating = false;
+                this.animationData = null;
+                this.currentPhase = 'idle';
+                this.movingUnits = [];
+                
+                // Update the game state to match final values
+                if (this.gameState && this.gameState.graph) {
+                    this.gameState.graph.vertices.forEach(vertex => {
+                        const displayVertex = this.displayedVertices.get(vertex.id);
+                        if (displayVertex) {
+                            vertex.units = displayVertex.units;
+                            vertex.controller = displayVertex.controller;
+                        }
+                    });
+                }
+                
+                this.addLogEntry('Turn animation completed', 'turn-data');
+            }
+
+            easeInOutCubic(t) {
+                return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+            }
+
+            getVertexPosition(vertexId, scale, offsetX, offsetY) {
+                if (!this.gameState || !this.gameState.graph) return null;
+                
+                const vertex = this.gameState.graph.vertices.find(v => v.id === vertexId);
+                if (!vertex) return null;
+                
+                return {
+                    x: vertex.position[0] * scale + offsetX,
+                    y: vertex.position[1] * scale + offsetY
+                };
             }
 
             setupCanvas() {
@@ -427,9 +617,14 @@
             }
 
             handleServerMessage(data) {
+                console.log('Received message:', data.type, data);
+                
                 switch (data.type) {
                     case 'game_state':
                         this.updateGameState(data);
+                        break;
+                    case 'turn_processed':
+                        this.handleTurnProcessed(data);
                         break;
                     case 'game_over':
                         this.showGameResult(data.winner, data.final_rankings);
@@ -440,6 +635,126 @@
                     default:
                         console.log('Unknown message type:', data.type);
                 }
+            }
+
+            handleTurnProcessed(turnData) {
+                console.log('Turn processed received:', turnData);
+                
+                // Don't start new animation if one is already running
+                if (this.isAnimating) {
+                    console.log('Skipping animation - previous turn still animating');
+                    this.addLogEntry('Skipping animation - previous turn still animating', 'turn-data');
+                    return;
+                }
+                
+                // Ensure we have current game state
+                if (!this.gameState || !this.gameState.graph) {
+                    console.log('No game state available for animation');
+                    this.addLogEntry('No game state available for animation', 'turn-data');
+                    return;
+                }
+                
+                // Store the animation data
+                this.animationData = turnData;
+                
+                // Check if we have any animations to perform
+                const moveCount = (turnData.move_animations && turnData.move_animations.length) ? turnData.move_animations.length : 0;
+                const genCount = (turnData.unit_generation && turnData.unit_generation.length) ? turnData.unit_generation.length : 0;
+                
+                console.log(`Animation data: ${moveCount} moves, ${genCount} generations`);
+                
+                if (moveCount === 0 && genCount === 0) {
+                    console.log('No animations to perform');
+                    this.addLogEntry('No animations to perform this turn', 'turn-data');
+                    return;
+                }
+                
+                // Estimate turn duration (default 1000ms, could be sent from server)
+                this.turnDuration = 1000;
+                
+                // Initialize displayed vertices from current game state
+                this.displayedVertices.clear();
+                this.gameState.graph.vertices.forEach(vertex => {
+                    this.displayedVertices.set(vertex.id, {
+                        id: vertex.id,
+                        controller: vertex.controller,
+                        units: vertex.units,
+                        position: vertex.position,
+                        weight: vertex.weight
+                    });
+                });
+                
+                console.log('Displayed vertices initialized:', this.displayedVertices.size);
+                
+                // Set up moving units for animation
+                this.setupMovingUnits((turnData.move_animations && turnData.move_animations.length) ? turnData.move_animations : []);
+                
+                console.log('Moving units set up:', this.movingUnits.length);
+                
+                // Log turn processing information
+                this.addLogEntry('Turn ' + turnData.turn + ' animating: ' + moveCount + ' moves, ' + genCount + ' generations', 'turn-data');
+                
+                // Start the animation
+                this.isAnimating = true;
+                this.animationStartTime = performance.now();
+                this.currentPhase = 'movement';
+                
+                console.log('Animation started at:', this.animationStartTime);
+            }
+
+            setupMovingUnits(moveAnimations) {
+                this.movingUnits = [];
+                
+                if (!this.gameState || !this.gameState.graph) return;
+                
+                // Calculate current render parameters
+                const canvas = this.canvas;
+                const rect = canvas.getBoundingClientRect();
+                const width = rect.width;
+                const height = rect.height;
+                const vertices = this.gameState.graph.vertices;
+                
+                if (vertices.length === 0) return;
+                
+                const minX = Math.min(...vertices.map(v => v.position[0]));
+                const maxX = Math.max(...vertices.map(v => v.position[0]));
+                const minY = Math.min(...vertices.map(v => v.position[1]));
+                const maxY = Math.max(...vertices.map(v => v.position[1]));
+                
+                const graphWidth = maxX - minX;
+                const graphHeight = maxY - minY;
+                
+                const padding = 60;
+                const scale = Math.min(
+                    (width - 2 * padding) / (graphWidth || 1),
+                    (height - 2 * padding) / (graphHeight || 1)
+                );
+                
+                const offsetX = (width - graphWidth * scale) / 2 - minX * scale;
+                const offsetY = (height - graphHeight * scale) / 2 - minY * scale;
+                
+                // Create moving unit objects
+                moveAnimations.forEach(move => {
+                    const fromPos = this.getVertexPosition(move.from_vertex, scale, offsetX, offsetY);
+                    const toPos = this.getVertexPosition(move.to_vertex, scale, offsetX, offsetY);
+                    
+                    if (fromPos && toPos) {
+                        this.movingUnits.push({
+                            playerId: move.player_id,
+                            fromVertex: move.from_vertex,
+                            toVertex: move.to_vertex,
+                            units: move.units,
+                            cost: move.cost,
+                            startX: fromPos.x,
+                            startY: fromPos.y,
+                            endX: toPos.x,
+                            endY: toPos.y,
+                            currentX: fromPos.x,
+                            currentY: fromPos.y,
+                            alpha: 1.0
+                        });
+                    }
+                });
             }
 
             updateConnectionStatus(status, message) {
@@ -459,6 +774,9 @@
             }
 
             updateGameState(gameState) {
+                console.log('Game state update received:', gameState.turn, gameState.game_status);
+                
+                const wasFirstState = !this.gameState;
                 this.gameState = gameState;
                 
                 // Update UI elements
@@ -469,20 +787,224 @@
                 // Update players
                 this.updatePlayers(gameState.players);
                 
-                // Render graph
-                if (gameState.graph) {
-                    this.renderGraph(gameState.graph);
-                }
-                
-                // Log eliminations
-                if (gameState.elimination_order && gameState.elimination_order.length > 0) {
-                    const lastElimination = gameState.elimination_order[gameState.elimination_order.length - 1];
-                    if (lastElimination[0] === gameState.turn) {
-                        lastElimination[1].forEach(playerId => {
-                            this.addLogEntry(`${playerId} eliminated on turn ${gameState.turn}`, 'elimination');
+                // If this is the first state or no animation is running, render immediately
+                if (wasFirstState || !this.isAnimating) {
+                    console.log('Updating displayed vertices immediately (no animation running)');
+                    // Initialize displayed vertices from game state
+                    if (gameState.graph) {
+                        this.displayedVertices.clear();
+                        gameState.graph.vertices.forEach(vertex => {
+                            this.displayedVertices.set(vertex.id, {
+                                id: vertex.id,
+                                controller: vertex.controller,
+                                units: vertex.units,
+                                position: vertex.position,
+                                weight: vertex.weight
+                            });
                         });
                     }
+                } else {
+                    console.log('Animation is running, storing target state');
+                    // Animation is running, store the target state
+                    if (gameState.graph && this.animationData) {
+                        this.targetVertices.clear();
+                        gameState.graph.vertices.forEach(vertex => {
+                            this.targetVertices.set(vertex.id, {
+                                id: vertex.id,
+                                controller: vertex.controller,
+                                units: vertex.units,
+                                position: vertex.position,
+                                weight: vertex.weight
+                            });
+                        });
+                        
+                        // Set base units for generation animation
+                        if (this.animationData && this.animationData.unit_generation) {
+                            this.animationData.unit_generation.forEach(genData => {
+                                const displayVertex = this.displayedVertices.get(genData.vertex_id);
+                                if (displayVertex && !displayVertex.baseUnits) {
+                                    displayVertex.baseUnits = displayVertex.units;
+                                }
+                            });
+                        }
+                        
+                        console.log('Target vertices stored for animation:', this.targetVertices.size);
+                    }
                 }
+            }
+
+            renderFrame() {
+                if (!this.gameState || !this.gameState.graph) return;
+                
+                const canvas = this.canvas;
+                const ctx = this.ctx;
+                const rect = canvas.getBoundingClientRect();
+                const width = rect.width;
+                const height = rect.height;
+                
+                // Clear canvas
+                ctx.clearRect(0, 0, width, height);
+                
+                // Calculate scale and offset for graph positioning
+                const vertices = this.gameState.graph.vertices;
+                if (vertices.length === 0) return;
+                
+                const minX = Math.min(...vertices.map(v => v.position[0]));
+                const maxX = Math.max(...vertices.map(v => v.position[0]));
+                const minY = Math.min(...vertices.map(v => v.position[1]));
+                const maxY = Math.max(...vertices.map(v => v.position[1]));
+                
+                const graphWidth = maxX - minX;
+                const graphHeight = maxY - minY;
+                
+                const padding = 60;
+                const scale = Math.min(
+                    (width - 2 * padding) / (graphWidth || 1),
+                    (height - 2 * padding) / (graphHeight || 1)
+                );
+                
+                const offsetX = (width - graphWidth * scale) / 2 - minX * scale;
+                const offsetY = (height - graphHeight * scale) / 2 - minY * scale;
+                
+                // Draw edges first
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                
+                this.gameState.graph.edges.forEach(edge => {
+                    const fromVertex = vertices.find(v => v.id === edge.from);
+                    const toVertex = vertices.find(v => v.id === edge.to);
+                    
+                    if (fromVertex && toVertex) {
+                        const fromX = fromVertex.position[0] * scale + offsetX;
+                        const fromY = fromVertex.position[1] * scale + offsetY;
+                        const toX = toVertex.position[0] * scale + offsetX;
+                        const toY = toVertex.position[1] * scale + offsetY;
+                        
+                        ctx.moveTo(fromX, fromY);
+                        ctx.lineTo(toX, toY);
+                    }
+                });
+                
+                ctx.stroke();
+                
+                // Draw vertices using displayed state
+                vertices.forEach(vertex => {
+                    const displayVertex = this.displayedVertices.get(vertex.id);
+                    if (displayVertex) {
+                        this.renderVertex(displayVertex, scale, offsetX, offsetY);
+                    } else {
+                        this.renderVertex(vertex, scale, offsetX, offsetY);
+                    }
+                });
+                
+                // Draw moving units
+                this.renderMovingUnits();
+                
+                // Debug info
+                if (this.isAnimating) {
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                    ctx.font = '12px sans-serif';
+                    ctx.fillText('Animating: ' + this.currentPhase + ' (' + this.movingUnits.length + ' moving units)', 10, 30);
+                }
+            }
+
+            renderVertex(vertex, scale, offsetX, offsetY) {
+                const ctx = this.ctx;
+                const x = vertex.position[0] * scale + offsetX;
+                const y = vertex.position[1] * scale + offsetY;
+                let radius = 25;
+                
+                // Apply generation pulse effect
+                if (vertex.generationPulse) {
+                    radius = radius * vertex.generationPulse;
+                }
+                
+                // Determine vertex color
+                let fillColor = 'rgba(100, 100, 100, 0.8)'; // neutral
+                
+                if (vertex.controllerTransition !== undefined) {
+                    // Animate color transition
+                    const oldColor = vertex.controller ? this.playerColors[vertex.controller] : 'rgba(100, 100, 100, 0.8)';
+                    const newColor = vertex.newController ? this.playerColors[vertex.newController] : 'rgba(100, 100, 100, 0.8)';
+                    fillColor = this.interpolateColor(oldColor, newColor, vertex.controllerTransition);
+                } else if (vertex.controller) {
+                    fillColor = this.playerColors[vertex.controller] || '#6b7280';
+                }
+                
+                // Draw vertex circle
+                ctx.beginPath();
+                ctx.arc(x, y, radius, 0, 2 * Math.PI);
+                ctx.fillStyle = fillColor;
+                ctx.fill();
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                
+                // Draw unit count
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 14px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(vertex.units.toString(), x, y);
+                
+                // Draw vertex ID (smaller, below)
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+                ctx.font = '10px sans-serif';
+                ctx.fillText(vertex.id.toString(), x, y + radius + 15);
+            }
+
+            renderMovingUnits() {
+                const ctx = this.ctx;
+                
+                this.movingUnits.forEach(unit => {
+                    const color = this.playerColors[unit.playerId] || '#ffffff';
+                    
+                    // Draw moving unit as a smaller circle
+                    ctx.save();
+                    ctx.globalAlpha = unit.alpha;
+                    
+                    ctx.beginPath();
+                    ctx.arc(unit.currentX, unit.currentY, 8, 0, 2 * Math.PI);
+                    ctx.fillStyle = color;
+                    ctx.fill();
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                    
+                    // Draw unit count
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = 'bold 10px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(unit.units.toString(), unit.currentX, unit.currentY);
+                    
+                    ctx.restore();
+                });
+            }
+
+            interpolateColor(color1, color2, t) {
+                // Simple color interpolation for RGB hex colors
+                if (typeof color1 === 'string' && color1.startsWith('#') && 
+                    typeof color2 === 'string' && color2.startsWith('#')) {
+                    
+                    const r1 = parseInt(color1.substr(1, 2), 16);
+                    const g1 = parseInt(color1.substr(3, 2), 16);
+                    const b1 = parseInt(color1.substr(5, 2), 16);
+                    
+                    const r2 = parseInt(color2.substr(1, 2), 16);
+                    const g2 = parseInt(color2.substr(3, 2), 16);
+                    const b2 = parseInt(color2.substr(5, 2), 16);
+                    
+                    const r = Math.round(r1 + (r2 - r1) * t);
+                    const g = Math.round(g1 + (g2 - g1) * t);
+                    const b = Math.round(b1 + (b2 - b1) * t);
+                    
+                    return `rgb(${r}, ${g}, ${b})`;
+                }
+                
+                // Fallback to direct transition
+                return t < 0.5 ? color1 : color2;
             }
 
             updatePlayers(players) {
@@ -515,98 +1037,15 @@
             }
 
             renderGraph(graph) {
-                if (!graph || !graph.vertices || !graph.edges) return;
-                
-                const canvas = this.canvas;
-                const ctx = this.ctx;
-                const rect = canvas.getBoundingClientRect();
-                const width = rect.width;
-                const height = rect.height;
-                
-                // Clear canvas
-                ctx.clearRect(0, 0, width, height);
-                
-                // Calculate scale and offset for graph positioning
-                const vertices = graph.vertices;
-                if (vertices.length === 0) return;
-                
-                const minX = Math.min(...vertices.map(v => v.position[0]));
-                const maxX = Math.max(...vertices.map(v => v.position[0]));
-                const minY = Math.min(...vertices.map(v => v.position[1]));
-                const maxY = Math.max(...vertices.map(v => v.position[1]));
-                
-                const graphWidth = maxX - minX;
-                const graphHeight = maxY - minY;
-                
-                const padding = 60;
-                const scale = Math.min(
-                    (width - 2 * padding) / (graphWidth || 1),
-                    (height - 2 * padding) / (graphHeight || 1)
-                );
-                
-                const offsetX = (width - graphWidth * scale) / 2 - minX * scale;
-                const offsetY = (height - graphHeight * scale) / 2 - minY * scale;
-                
-                // Draw edges first
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                
-                graph.edges.forEach(edge => {
-                    const fromVertex = vertices.find(v => v.id === edge.from);
-                    const toVertex = vertices.find(v => v.id === edge.to);
-                    
-                    if (fromVertex && toVertex) {
-                        const fromX = fromVertex.position[0] * scale + offsetX;
-                        const fromY = fromVertex.position[1] * scale + offsetY;
-                        const toX = toVertex.position[0] * scale + offsetX;
-                        const toY = toVertex.position[1] * scale + offsetY;
-                        
-                        ctx.moveTo(fromX, fromY);
-                        ctx.lineTo(toX, toY);
-                    }
-                });
-                
-                ctx.stroke();
-                
-                // Draw vertices
-                vertices.forEach(vertex => {
-                    this.updateVertex(vertex, scale, offsetX, offsetY);
-                });
+                // This method is now handled by renderFrame()
+                // Keep for compatibility but delegate to renderFrame
+                this.renderFrame();
             }
 
             updateVertex(vertex, scale, offsetX, offsetY) {
-                const ctx = this.ctx;
-                const x = vertex.position[0] * scale + offsetX;
-                const y = vertex.position[1] * scale + offsetY;
-                const radius = 25;
-                
-                // Determine vertex color
-                let fillColor = 'rgba(100, 100, 100, 0.8)'; // neutral
-                if (vertex.controller) {
-                    fillColor = this.playerColors[vertex.controller] || '#6b7280';
-                }
-                
-                // Draw vertex circle
-                ctx.beginPath();
-                ctx.arc(x, y, radius, 0, 2 * Math.PI);
-                ctx.fillStyle = fillColor;
-                ctx.fill();
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-                ctx.lineWidth = 2;
-                ctx.stroke();
-                
-                // Draw unit count
-                ctx.fillStyle = '#ffffff';
-                ctx.font = 'bold 14px sans-serif';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText(vertex.units.toString(), x, y);
-                
-                // Draw vertex ID (smaller, below)
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-                ctx.font = '10px sans-serif';
-                ctx.fillText(vertex.id.toString(), x, y + radius + 15);
+                // This method is now handled by renderVertex()
+                // Keep for compatibility
+                this.renderVertex(vertex, scale, offsetX, offsetY);
             }
 
             showGameResult(winners, rankings) {
@@ -662,6 +1101,23 @@
                 while (gameLog.children.length > 100) {
                     gameLog.removeChild(gameLog.firstChild);
                 }
+            }
+
+            // Legacy animation methods (now integrated into the main system)
+            
+            animateUnitMovement(moveData) {
+                // This functionality is now handled by the main animation system
+                console.log('Legacy method called - use main animation system instead');
+            }
+            
+            animateUnitGeneration(generationData) {
+                // This functionality is now handled by the main animation system
+                console.log('Legacy method called - use main animation system instead');
+            }
+            
+            animateCombatResolution(combatData) {
+                // This functionality is now handled by the main animation system
+                console.log('Legacy method called - use main animation system instead');
             }
         }
 
