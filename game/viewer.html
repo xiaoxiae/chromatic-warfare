@@ -544,23 +544,8 @@ updateMovementAnimation(progress) {
                 // Animate unit count increases from pre-generation to final state
                 const easedProgress = this.easeInOutCubic(progress);
                 
-                if (this.animationData && this.animationData.unit_generation) {
-                    this.animationData.unit_generation.forEach(genData => {
-                        const displayVertex = this.displayedVertices.get(genData.vertex_id);
-                        const targetVertex = this.targetVertices.get(genData.vertex_id);
-                        
-                        if (displayVertex && targetVertex && displayVertex.preGenerationUnits !== undefined) {
-                            const startUnits = displayVertex.preGenerationUnits;
-                            const endUnits = targetVertex.units;
-                            displayVertex.units = Math.floor(startUnits + (endUnits - startUnits) * easedProgress);
-                        }
-                    });
-                }
-                
                 // Update +Weight text animations
                 this.unitGenerationAnimations.forEach(anim => {
-            
-            
                     // Float upward and fade out
                     anim.offsetY = (this.easeInOutCubic(1.0 - progress) * -10) -30; // Move up 40 pixels
                     anim.alpha = this.easeInOutCubic(1.0 - progress); // Fade out completely
@@ -1282,10 +1267,16 @@ setupMovingUnits(moveAnimations) {
                 
                 // Draw unit count
                 ctx.fillStyle = '#fdf6e3'; /* Solarized light base3 for high contrast */
-                ctx.font = 'bold 14px sans-serif';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
-                ctx.fillText(vertex.units.toString(), x, y);
+
+                if (vertex.controller) {
+                  ctx.font = 'bold 14px sans-serif';
+                  ctx.fillText(vertex.units.toString(), x, y);
+                } else {
+                  ctx.font = 'bold 10px sans-serif';
+                  ctx.fillText(vertex.weight.toString(), x, y);
+                }
             }
 
 renderMovingUnits() {
