@@ -104,6 +104,9 @@ class GameServer:
                 "message": "Game has been reset."
             }))
             
+            # Send the fresh game state to viewers so they see the reset state immediately
+            asyncio.create_task(self.broadcast_game_state())
+            
             logger.info(f"Game reset complete. Grid regenerated with {len(self.game_state.graph.vertices)} vertices")
             logger.info(f"Waiting for players to reconnect...")
             
@@ -281,22 +284,19 @@ class GameServer:
             })
     
     async def add_viewer_connection(self, websocket: WebSocketServerProtocol) -> bool:
-        """
-        Register a new viewer connection.
-        
-        Args:
-            websocket: WebSocket connection
-            
-        Returns:
-            True if connection was added successfully, False otherwise
-        """
         try:
             self.viewer_connections.add(websocket)
             logger.info(f"Viewer connected. Total viewers: {len(self.viewer_connections)}")
-            
-            # Send current game state
+
+            # Send connection confirmation first
+            await self.send_to_websocket(websocket, {
+                "type": "viewer_connected",
+                "message": "Connected as viewer"
+            })
+
+            # Then send game state
             await self.send_to_websocket(websocket, self.game_state.to_dict())
-            
+
             return True
             
         except Exception as e:
@@ -704,7 +704,6 @@ class GameServer:
                 "unit_generation": unit_generation_data,
                 "eliminations": turn_result["eliminations"],
                 "game_over": turn_result["game_over"],
-                "winner": turn_result.get("winner")
             }
             
             # Broadcast detailed turn data first (for animations)
@@ -723,7 +722,7 @@ class GameServer:
                 logger.info(f"Players eliminated: {turn_result['eliminations']}")
             
             if turn_result["game_over"]:
-                logger.info(f"Game over! Winners: {turn_result['winner']}")
+                logger.info(f"Game over! Rankings: {self.game_state.final_rankings}")
                 
                 # Stop the turn timer
                 if self.turn_timer_task and not self.turn_timer_task.done():
@@ -731,7 +730,12 @@ class GameServer:
                     
                 await self.broadcast_to_bots({
                     "type": "game_over",
-                    "winner": turn_result["winner"],
+                    "turn": self.game_state.current_turn,
+                    "final_rankings": self.game_state.final_rankings
+                })
+
+                await self.broadcast_to_viewers({
+                    "type": "game_over",
                     "turn": self.game_state.current_turn,
                     "final_rankings": self.game_state.final_rankings
                 })
@@ -1093,19 +1097,15 @@ async def test_two_player_game():
                                     logger.info(f"[{player_id}] Eliminated, not sending commands")
                                     
                             elif game_status == "ended":
-                                winner = data.get("winner", [])
                                 rankings = data.get("final_rankings", [])
                                 logger.info(f"[{player_id}] Game ended!")
                                 logger.info(f"[{player_id}] Final rankings: {rankings}")
-                                logger.info(f"[{player_id}] Winners: {winner}")
                                 game_over = True
                                 
                         elif message_type == "game_over":
-                            winner = data.get("winner", [])
                             rankings = data.get("final_rankings", [])
                             logger.info(f"[{player_id}] Game over message received!")
                             logger.info(f"[{player_id}] Final rankings: {rankings}")
-                            logger.info(f"[{player_id}] Winners: {winner}")
                             game_over = True
                             
                         elif message_type == "error":
@@ -1285,165 +1285,6 @@ async def test_client():
         logger.error(f"Test client error: {e}")
 
 
-async def test_periodic_turns():
-    """
-    Test the new periodic turn system with faster turns for demonstration.
-    """
-    async def bot_client(player_id: str, delay: float = 1):
-        """
-        Simulate a bot client with faster command submission for periodic turn testing.
-        """
-        await asyncio.sleep(delay)
-        
-        try:
-            uri = "ws://localhost:8765"
-            logger.info(f"[{player_id}] Connecting to {uri}")
-            
-            async with websockets.connect(uri) as websocket:
-                # Join as a bot
-                join_message = {
-                    "type": "join_as_bot",
-                    "player_id": player_id
-                }
-                await websocket.send(json.dumps(join_message))
-                logger.info(f"[{player_id}] Sent join request")
-                
-                game_over = False
-                turn_count = 0
-                
-                while not game_over and turn_count < 20:  # Limit for demo
-                    try:
-                        message = await asyncio.wait_for(websocket.recv(), timeout=10.0)
-                        data = json.loads(message)
-                        message_type = data.get("type")
-                        
-                        if message_type == "connection_confirmed":
-                            starting_vertex = data.get("starting_vertex")
-                            logger.info(f"[{player_id}] Confirmed, assigned vertex {starting_vertex}")
-                            
-                        elif message_type == "grace_period_started":
-                            duration = data.get("duration_seconds", 0)
-                            logger.info(f"[{player_id}] Grace period: {duration}s")
-                            
-                        elif message_type == "turn_processed":
-                            turn = data.get("turn")
-                            moves = data.get("move_animations", [])
-                            generation = data.get("unit_generation", [])
-                            logger.info(f"[{player_id}] Turn {turn} processed: {len(moves)} moves, {len(generation)} generations")
-                            
-                        elif message_type == "game_state":
-                            game_status = data.get("game_status")
-                            current_turn = data.get("turn", 0)
-                            
-                            if game_status == "active":
-                                turn_count = current_turn
-                                logger.info(f"[{player_id}] Turn {current_turn}")
-                                
-                                # Send commands quickly for periodic turn testing
-                                await send_quick_commands(websocket, player_id, data)
-                                    
-                            elif game_status == "ended":
-                                winner = data.get("winner", [])
-                                logger.info(f"[{player_id}] Game ended! Winners: {winner}")
-                                game_over = True
-                                
-                        elif message_type == "game_over":
-                            winner = data.get("winner", [])
-                            logger.info(f"[{player_id}] Game over! Winners: {winner}")
-                            game_over = True
-                            
-                    except asyncio.TimeoutError:
-                        logger.warning(f"[{player_id}] Timeout - continuing")
-                        continue
-                    except websockets.exceptions.ConnectionClosed:
-                        logger.info(f"[{player_id}] Connection closed")
-                        break
-                
-                logger.info(f"[{player_id}] Test completed after {turn_count} turns")
-                
-        except Exception as e:
-            logger.error(f"[{player_id}] Client error: {e}")
-    
-    async def send_quick_commands(websocket, player_id: str, game_state: dict):
-        """Send simple commands quickly for testing periodic turns."""
-        try:
-            vertices = game_state.get("graph", {}).get("vertices", [])
-            edges = game_state.get("graph", {}).get("edges", [])
-            
-            my_vertices = [v for v in vertices if v.get("controller") == player_id]
-            
-            if not my_vertices:
-                # Send empty command
-                move_message = {"type": "move_command", "commands": []}
-                await websocket.send(json.dumps(move_message))
-                return
-            
-            # Build adjacency map
-            adjacency = {}
-            for edge in edges:
-                from_id = edge["from"]
-                to_id = edge["to"]
-                if from_id not in adjacency:
-                    adjacency[from_id] = []
-                adjacency[from_id].append(to_id)
-            
-            commands = []
-            
-            # Simple strategy: attack any adjacent enemy or expand to neutral
-            for vertex in my_vertices[:2]:  # Limit to 2 vertices to keep it simple
-                vertex_id = vertex["id"]
-                units = vertex["units"]
-                
-                if units <= 1:
-                    continue
-                
-                adjacent_ids = adjacency.get(vertex_id, [])
-                if not adjacent_ids:
-                    continue
-                
-                # Find a target
-                for adj_id in adjacent_ids:
-                    adj_vertex = next((v for v in vertices if v["id"] == adj_id), None)
-                    if adj_vertex and adj_vertex.get("controller") != player_id:
-                        # Attack or expand
-                        units_to_send = min(2, units - 1)
-                        if units_to_send > 0:
-                            commands.append({
-                                "from": vertex_id,
-                                "to": adj_id,
-                                "units": units_to_send
-                            })
-                            break
-            
-            # Send commands
-            move_message = {
-                "type": "move_command", 
-                "commands": commands
-            }
-            await websocket.send(json.dumps(move_message))
-            
-            if commands:
-                logger.info(f"[{player_id}] Sent {len(commands)} quick commands")
-                
-        except Exception as e:
-            logger.error(f"[{player_id}] Error sending quick commands: {e}")
-            # Send empty command to avoid blocking
-            move_message = {"type": "move_command", "commands": []}
-            await websocket.send(json.dumps(move_message))
-    
-    # Start test with faster turns
-    logger.info("=== Testing Periodic Turn System (0.5s turns) ===")
-    
-    bot1_task = asyncio.create_task(bot_client("fast_bot_1", delay=0.3))
-    bot2_task = asyncio.create_task(bot_client("fast_bot_2", delay=0.6))
-    
-    try:
-        await asyncio.gather(bot1_task, bot2_task)
-        logger.info("=== Periodic Turn Test Completed ===")
-    except Exception as e:
-        logger.error(f"Test error: {e}")
-
-
 if __name__ == "__main__":
     import sys
     
@@ -1456,9 +1297,6 @@ if __name__ == "__main__":
     elif len(sys.argv) > 1 and sys.argv[1] == "test_removal":
         # Run early assignment and removal test
         asyncio.run(test_early_assignment_and_removal())
-    elif len(sys.argv) > 1 and sys.argv[1] == "test_periodic":
-        # Run periodic turn test
-        asyncio.run(test_periodic_turns())
     elif len(sys.argv) > 1 and sys.argv[1] == "fast":
         # Run server with fast turns for testing
         try:

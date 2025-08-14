@@ -468,17 +468,6 @@ class GameState:
             if eliminated_players:
                 self.final_rankings.append(eliminated_players)
     
-    def get_winner(self) -> Optional[List[str]]:
-        """
-        Get the winner(s) of the game.
-        
-        Returns:
-            List of winning player IDs, or None if game not ended
-        """
-        if self.status == GameStatus.ENDED and self.final_rankings:
-            return self.final_rankings[0]  # First group is the winners
-        return None
-    
     def to_dict(self) -> Dict:
         """
         Convert game state to dictionary format for JSON serialization.
@@ -509,7 +498,6 @@ class GameState:
             "game_status": self.status.value,
             "elimination_order": self.elimination_order,
             "final_rankings": self.final_rankings,
-            "winner": self.get_winner()
         }
 
 
@@ -812,7 +800,6 @@ class GameEngine:
             "turn": self.game_state.current_turn,
             "eliminations": [],
             "game_over": False,
-            "winner": None
         }
         
         # Phase 1: Resolve all movements and combat
@@ -828,7 +815,6 @@ class GameEngine:
         # Phase 4: Check if game is over
         if self.is_game_over():
             turn_results["game_over"] = True
-            turn_results["winner"] = self.game_state.winner
         else:
             # Advance to next turn
             self.game_state.current_turn += 1
