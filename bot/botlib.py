@@ -489,7 +489,7 @@ class GameBot(ABC):
                     
                 except asyncio.TimeoutError:
                     logger.warning(f"[{self.player_id}] Timeout waiting for server message")
-                    continue
+                    break
                     
                 except websockets.exceptions.ConnectionClosed:
                     logger.info(f"[{self.player_id}] Connection closed by server")
