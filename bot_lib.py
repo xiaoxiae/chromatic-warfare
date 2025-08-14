@@ -225,15 +225,17 @@ class GameBot(ABC):
     and provides a clean interface for bot implementation.
     """
     
-    def __init__(self, player_id: str, server_url: str = "ws://localhost:8765"):
+    def __init__(self, player_id: str, game_id: str = None, server_url: str = "ws://localhost:8765"):
         """
         Initialize the bot.
         
         Args:
             player_id: Unique identifier for this bot
+            game_id: ID of the game to join (if None, will join "default" game)
             server_url: WebSocket URL of the game server
         """
         self.player_id = player_id
+        self.game_id = game_id if game_id is not None else "default"
         self.server_url = server_url
         self.websocket = None
         self.game_state = None
@@ -245,7 +247,7 @@ class GameBot(ABC):
         self.on_game_ended: Optional[Callable[[Dict], None]] = None
         self.on_turn_processed: Optional[Callable[[Dict], None]] = None
         
-        logger.info(f"Bot {self.player_id} initialized")
+        logger.info(f"Bot {self.player_id} initialized for game {self.game_id}")
     
     @abstractmethod
     def play_turn(self, game_state: GameState) -> List[Command]:
@@ -413,10 +415,11 @@ class GameBot(ABC):
             logger.info(f"[{self.player_id}] Connecting to {self.server_url}")
             self.websocket = await websockets.connect(self.server_url)
             
-            # Join as bot
+            # Join as bot with game ID
             join_message = {
                 "type": "join_as_bot",
-                "player_id": self.player_id
+                "player_id": self.player_id,
+                "game_id": self.game_id
             }
             await self.websocket.send(json.dumps(join_message))
             
@@ -455,8 +458,9 @@ class GameBot(ABC):
         message_type = message.get("type")
         
         if message_type == "connection_confirmed":
+            game_id = message.get("game_id")
             starting_vertex = message.get("starting_vertex")
-            logger.info(f"[{self.player_id}] Connection confirmed, assigned vertex {starting_vertex}")
+            logger.info(f"[{self.player_id}] Connection confirmed for game {game_id}, assigned vertex {starting_vertex}")
             if self.on_connection_confirmed:
                 self.on_connection_confirmed(message)
                 

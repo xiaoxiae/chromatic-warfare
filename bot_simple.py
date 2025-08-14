@@ -109,12 +109,13 @@ def main():
     """Run the simple bot."""
     import sys
     
-    # Get bot ID from command line or use default
+    # Get bot ID and optional game ID from command line
     bot_id = sys.argv[1] if len(sys.argv) > 1 else "simple_bot"
+    game_id = sys.argv[2] if len(sys.argv) > 2 else None
     
     # Create and run the bot
-    bot = SimpleBot(bot_id)
-    print(f"Starting {bot_id} - peaceful expansion bot")
+    bot = SimpleBot(bot_id, game_id)
+    print(f"Starting {bot_id} - peaceful expansion bot for game {bot.game_id}")
     bot.run()
 
 

@@ -10,22 +10,23 @@ import json
 import logging
 import websockets
 import sys
+import time
 from typing import Dict, Set, Optional, Any
 from websockets.server import WebSocketServerProtocol
 from game_core import GameState, GameEngine, Command, PlayerStatus
+from typing import *
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
-class GameServer:
+class GameInstance:
     """
-    WebSocket server for managing the turn-based strategy game.
-    Handles bot connections, viewer connections, and message routing.
+    Single game instance managing one game with its own state, connections and logic.
     """
     
-    def __init__(self, grid_width: int = 5, grid_height: int = 5, max_turns: int = 100, starting_units: int = 5):
+    def __init__(self, game_id: str, grid_width: int = 5, grid_height: int = 5, max_turns: int = 10, starting_units: int = 5):
         """
         Initialize the game server.
         
@@ -35,6 +36,7 @@ class GameServer:
             max_turns: Maximum number of turns before game ends
             starting_units: Number of units each player starts with
         """
+        self.game_id = game_id
         self.grid_width = grid_width
         self.grid_height = grid_height
         self.max_turns = max_turns
@@ -62,8 +64,37 @@ class GameServer:
         self.turn_duration_seconds = 1.0  # Duration of each turn for consistent viewing
         self.turn_timer_task: Optional[asyncio.Task] = None
         
-        # Server control
+        # Game control
         self.shutdown_requested = False
+        self.game_ended_time: Optional[float] = None  # Timestamp when game ended
+        
+        logger.info(f"Game instance {self.game_id} created with grid {grid_width}x{grid_height}")
+    
+    def get_total_connections(self) -> int:
+        """Get total number of connections (bots + viewers)."""
+        return len(self.bot_connections) + len(self.viewer_connections)
+    
+    def should_be_cleaned_up(self, cleanup_delay_seconds: float = 60.0) -> bool:
+        """
+        Check if this game instance should be cleaned up.
+        
+        Args:
+            cleanup_delay_seconds: How long to wait after game ends before cleanup
+        
+        Returns:
+            True if game should be cleaned up
+        """
+        # Clean up if no connections
+        if self.get_total_connections() == 0:
+            return True
+        
+        # Clean up if game ended more than cleanup_delay_seconds ago
+        if self.game_ended_time is not None:
+            time_since_end = time.time() - self.game_ended_time
+            if time_since_end > cleanup_delay_seconds:
+                return True
+        
+        return False
     
     def reset_game(self) -> None:
         """
@@ -84,6 +115,7 @@ class GameServer:
             self.turn_commands.clear()
             self.grace_period_task = None
             self.turn_timer_task = None
+            self.game_ended_time = None  # Reset game end time
             
             # Reset game state with fresh grid
             self.game_state = GameState(max_turns=self.max_turns)
@@ -107,8 +139,8 @@ class GameServer:
             # Send the fresh game state to viewers so they see the reset state immediately
             asyncio.create_task(self.broadcast_game_state())
             
-            logger.info(f"Game reset complete. Grid regenerated with {len(self.game_state.graph.vertices)} vertices")
-            logger.info(f"Waiting for players to reconnect...")
+            logger.info(f"Game {self.game_id} reset complete. Grid regenerated with {len(self.game_state.graph.vertices)} vertices")
+            logger.info(f"Game {self.game_id}: Waiting for players to reconnect...")
             
         except Exception as e:
             logger.error(f"Error resetting game: {e}")
@@ -129,7 +161,7 @@ class GameServer:
                 logger.warning("Cannot start game - no players connected")
                 return False
             
-            logger.info(f"Force starting game with {len(self.bot_connections)} players")
+            logger.info(f"Game {self.game_id}: Force starting with {len(self.bot_connections)} players")
             
             # Cancel grace period if running
             if self.grace_period_task and not self.grace_period_task.done():
@@ -193,14 +225,15 @@ class GameServer:
             # Update player's total units
             self.game_state.players[player_id].update_total_units(self.game_state.graph)
             
-            logger.info(f"Bot {player_id} connected and assigned vertex {starting_vertex.id}. Total bots: {len(self.bot_connections)}")
+            logger.info(f"Game {self.game_id}: Bot {player_id} connected and assigned vertex {starting_vertex.id}. Total bots: {len(self.bot_connections)}")
             
-            # Send connection confirmation
+            # Send connection confirmation with game ID
             await self.send_to_websocket(websocket, {
                 "type": "connection_confirmed",
+                "game_id": self.game_id,
                 "player_id": player_id,
                 "starting_vertex": starting_vertex.id,
-                "message": f"Successfully connected and assigned starting vertex {starting_vertex.id}"
+                "message": f"Successfully connected to game {self.game_id} and assigned starting vertex {starting_vertex.id}"
             })
             
             # Broadcast updated game state to all clients
@@ -568,7 +601,7 @@ class GameServer:
                 return
             
             self.game_started = True
-            logger.info(f"Starting game with {len(self.bot_connections)} players")
+            logger.info(f"Game {self.game_id}: Starting with {len(self.bot_connections)} players")
             
             # Update game status and turn
             self.game_state.status = self.game_state.status.__class__.ACTIVE  # Set to ACTIVE
@@ -583,7 +616,7 @@ class GameServer:
             # Broadcast initial game state
             await self.broadcast_game_state()
             
-            logger.info(f"Game started on turn {self.game_state.current_turn} with {self.turn_duration_seconds}s turn duration")
+            logger.info(f"Game {self.game_id} started on turn {self.game_state.current_turn} with {self.turn_duration_seconds}s turn duration")
             
         except Exception as e:
             logger.error(f"Error starting game: {e}")
@@ -724,6 +757,9 @@ class GameServer:
             if turn_result["game_over"]:
                 logger.info(f"Game over! Rankings: {self.game_state.final_rankings}")
                 
+                # Mark game as ended
+                self.game_ended_time = time.time()
+                
                 # Stop the turn timer
                 if self.turn_timer_task and not self.turn_timer_task.done():
                     self.turn_timer_task.cancel()
@@ -773,6 +809,322 @@ class GameServer:
             await self.remove_connection(websocket)
 
 
+class GameServer:
+    """
+    Multi-game WebSocket server that manages multiple GameInstance objects.
+    Routes connections to specific games based on game_id.
+    """
+    
+    def __init__(self, default_grid_width: int = 5, default_grid_height: int = 5, 
+                 default_max_turns: int = 10, default_starting_units: int = 5,
+                 default_turn_duration: float = 1.0):
+        """
+        Initialize the multi-game server.
+        
+        Args:
+            default_grid_width: Default width for new games
+            default_grid_height: Default height for new games
+            default_max_turns: Default maximum turns for new games
+            default_starting_units: Default starting units for new games
+            default_turn_duration: Default turn duration for new games
+        """
+        self.games: Dict[str, GameInstance] = {}
+        self.connection_to_game: Dict[WebSocketServerProtocol, str] = {}  # websocket -> game_id
+        
+        # Default settings for new games
+        self.default_grid_width = default_grid_width
+        self.default_grid_height = default_grid_height
+        self.default_max_turns = default_max_turns
+        self.default_starting_units = default_starting_units
+        self.default_turn_duration = default_turn_duration
+        
+        # Server control
+        self.shutdown_requested = False
+        self.cleanup_task: Optional[asyncio.Task] = None
+        
+        logger.info(f"Multi-game server initialized")
+    
+    def create_game(self, game_id: str, grid_width: int = None, grid_height: int = None,
+                   max_turns: int = None, starting_units: int = None, 
+                   turn_duration: float = None) -> GameInstance:
+        """Create a new game instance with the given ID."""
+        if game_id in self.games:
+            raise ValueError(f"Game {game_id} already exists")
+        
+        # Use provided values or defaults
+        width = grid_width if grid_width is not None else self.default_grid_width
+        height = grid_height if grid_height is not None else self.default_grid_height
+        turns = max_turns if max_turns is not None else self.default_max_turns
+        units = starting_units if starting_units is not None else self.default_starting_units
+        duration = turn_duration if turn_duration is not None else self.default_turn_duration
+        
+        game = GameInstance(game_id, width, height, turns, units)
+        game.turn_duration_seconds = duration
+        self.games[game_id] = game
+        
+        logger.info(f"Created game {game_id} with {len(game.game_state.graph.vertices)} vertices")
+        return game
+    
+    def get_game(self, game_id: str) -> Optional[GameInstance]:
+        """Get a game instance by ID."""
+        return self.games.get(game_id)
+    
+    def list_games(self) -> List[str]:
+        """List all active game IDs."""
+        return list(self.games.keys())
+    
+    def remove_game(self, game_id: str) -> bool:
+        """Remove a game instance."""
+        if game_id not in self.games:
+            return False
+        
+        # Clean up any connections associated with this game
+        connections_to_remove = [ws for ws, gid in self.connection_to_game.items() if gid == game_id]
+        for ws in connections_to_remove:
+            del self.connection_to_game[ws]
+        
+        del self.games[game_id]
+        logger.info(f"Removed game {game_id}")
+        return True
+    
+    async def handle_client(self, websocket: WebSocketServerProtocol, path: str = "/") -> None:
+        """
+        Handle a new WebSocket client connection.
+        
+        Args:
+            websocket: WebSocket connection
+            path: Connection path (optional)
+        """
+        logger.info(f"New connection from {websocket.remote_address}")
+        
+        try:
+            async for message in websocket:
+                await self.handle_message(websocket, message)
+        except websockets.exceptions.ConnectionClosed:
+            logger.info(f"Connection closed: {websocket.remote_address}")
+        except Exception as e:
+            logger.error(f"Error handling client: {e}")
+        finally:
+            await self.cleanup_connection(websocket)
+    
+    async def handle_message(self, websocket: WebSocketServerProtocol, message: str) -> None:
+        """
+        Parse and route incoming messages to the appropriate game.
+        
+        Args:
+            websocket: WebSocket connection that sent the message
+            message: Raw message string
+        """
+        try:
+            data = json.loads(message)
+            message_type = data.get("type")
+            
+            if message_type == "join_as_bot":
+                await self.handle_bot_join(websocket, data)
+                
+            elif message_type == "join_as_viewer":
+                await self.handle_viewer_join(websocket, data)
+                
+            elif message_type == "move_command":
+                await self.route_to_game(websocket, data)
+                
+            elif message_type == "create_game":
+                await self.handle_create_game(websocket, data)
+                
+            elif message_type == "list_games":
+                await self.handle_list_games(websocket)
+                
+            else:
+                await self.send_error(websocket, f"Unknown message type: {message_type}")
+                
+        except json.JSONDecodeError:
+            await self.send_error(websocket, "Invalid JSON format")
+        except Exception as e:
+            logger.error(f"Error handling message: {e}")
+            await self.send_error(websocket, "Internal server error")
+    
+    async def handle_bot_join(self, websocket: WebSocketServerProtocol, data: Dict[str, Any]) -> None:
+        """Handle bot joining a specific game."""
+        player_id = data.get("player_id")
+        game_id = data.get("game_id")
+        
+        if not player_id:
+            await self.send_error(websocket, "player_id is required")
+            return
+            
+        if not game_id:
+            await self.send_error(websocket, "game_id is required")
+            return
+        
+        # Get or create the game
+        game = self.games.get(game_id)
+        if not game:
+            # Auto-create game if it doesn't exist
+            try:
+                game = self.create_game(game_id)
+            except Exception as e:
+                await self.send_error(websocket, f"Failed to create game {game_id}: {e}")
+                return
+        
+        # Add bot to the specific game
+        success = await game.add_bot_connection(websocket, player_id)
+        if success:
+            self.connection_to_game[websocket] = game_id
+        
+    async def handle_viewer_join(self, websocket: WebSocketServerProtocol, data: Dict[str, Any]) -> None:
+        """Handle viewer joining a specific game."""
+        game_id = data.get("game_id")
+        
+        if not game_id:
+            await self.send_error(websocket, "game_id is required")
+            return
+        
+        # Get or create the game
+        game = self.games.get(game_id)
+        if not game:
+            # Auto-create game if it doesn't exist
+            try:
+                game = self.create_game(game_id)
+            except Exception as e:
+                await self.send_error(websocket, f"Failed to create game {game_id}: {e}")
+                return
+        
+        # Add viewer to the specific game
+        success = await game.add_viewer_connection(websocket)
+        if success:
+            self.connection_to_game[websocket] = game_id
+    
+    async def handle_create_game(self, websocket: WebSocketServerProtocol, data: Dict[str, Any]) -> None:
+        """Handle explicit game creation request."""
+        game_id = data.get("game_id")
+        if not game_id:
+            await self.send_error(websocket, "game_id is required")
+            return
+        
+        try:
+            grid_width = data.get("grid_width")
+            grid_height = data.get("grid_height")
+            max_turns = data.get("max_turns")
+            starting_units = data.get("starting_units")
+            turn_duration = data.get("turn_duration")
+            
+            game = self.create_game(game_id, grid_width, grid_height, max_turns, starting_units, turn_duration)
+            
+            await self.send_message(websocket, {
+                "type": "game_created",
+                "game_id": game_id,
+                "message": f"Game {game_id} created successfully"
+            })
+            
+        except ValueError as e:
+            await self.send_error(websocket, str(e))
+        except Exception as e:
+            await self.send_error(websocket, f"Failed to create game: {e}")
+    
+    async def handle_list_games(self, websocket: WebSocketServerProtocol) -> None:
+        """Handle request to list all games."""
+        games_info = []
+        for game_id, game in self.games.items():
+            games_info.append({
+                "game_id": game_id,
+                "status": game.game_state.status.value if game.game_state else "unknown",
+                "players": len(game.bot_connections),
+                "viewers": len(game.viewer_connections),
+                "turn": game.game_state.current_turn if game.game_state else 0
+            })
+        
+        await self.send_message(websocket, {
+            "type": "games_list",
+            "games": games_info
+        })
+    
+    async def route_to_game(self, websocket: WebSocketServerProtocol, data: Dict[str, Any]) -> None:
+        """Route a message to the appropriate game instance."""
+        game_id = self.connection_to_game.get(websocket)
+        if not game_id:
+            await self.send_error(websocket, "Not connected to any game")
+            return
+        
+        game = self.games.get(game_id)
+        if not game:
+            await self.send_error(websocket, f"Game {game_id} no longer exists")
+            return
+        
+        # Forward the message to the game instance
+        if data.get("type") == "move_command":
+            await game.handle_move_command(websocket, data)
+    
+    async def cleanup_connection(self, websocket: WebSocketServerProtocol) -> None:
+        """Clean up a disconnected client."""
+        try:
+            game_id = self.connection_to_game.get(websocket)
+            if game_id:
+                game = self.games.get(game_id)
+                if game:
+                    await game.remove_connection(websocket)
+                del self.connection_to_game[websocket]
+        except Exception as e:
+            logger.error(f"Error cleaning up connection: {e}")
+    
+    async def send_error(self, websocket: WebSocketServerProtocol, error_message: str) -> None:
+        """Send an error message to a client."""
+        await self.send_message(websocket, {
+            "type": "error",
+            "message": error_message
+        })
+    
+    async def send_message(self, websocket: WebSocketServerProtocol, message: Dict[str, Any]) -> None:
+        """Send a message to a specific websocket connection."""
+        try:
+            await websocket.send(json.dumps(message))
+        except websockets.exceptions.ConnectionClosed:
+            pass  # Connection already closed
+        except Exception as e:
+            logger.error(f"Error sending message: {e}")
+    
+    def start_cleanup_task(self) -> None:
+        """Start the automatic game cleanup task."""
+        if self.cleanup_task is None or self.cleanup_task.done():
+            self.cleanup_task = asyncio.create_task(self.cleanup_loop())
+    
+    def stop_cleanup_task(self) -> None:
+        """Stop the automatic game cleanup task."""
+        if self.cleanup_task and not self.cleanup_task.done():
+            self.cleanup_task.cancel()
+    
+    async def cleanup_loop(self, check_interval_seconds: float = 1.0, 
+                          cleanup_delay_seconds: float = 60.0) -> None:
+        """
+        Periodically check for and remove games that should be cleaned up.
+        
+        Args:
+            check_interval_seconds: How often to check for cleanup candidates (default: 1 second)
+            cleanup_delay_seconds: How long to wait after game ends before cleanup (default: 60 seconds)
+        """
+        try:
+            while not self.shutdown_requested:
+                await asyncio.sleep(check_interval_seconds)
+                
+                # Find games to clean up
+                games_to_remove = []
+                for game_id, game in self.games.items():
+                    if game.should_be_cleaned_up(cleanup_delay_seconds):
+                        games_to_remove.append(game_id)
+                
+                # Remove the games and log only when actually removing
+                for game_id in games_to_remove:
+                    game = self.games[game_id]
+                    reason = "no connections" if game.get_total_connections() == 0 else "ended >1 minute ago"
+                    logger.info(f"Cleaning up game {game_id} ({reason})")
+                    self.remove_game(game_id)
+                    
+        except asyncio.CancelledError:
+            logger.info("Game cleanup loop cancelled")
+            raise
+        except Exception as e:
+            logger.error(f"Error in cleanup loop: {e}")
+
+
 async def keyboard_input_handler(server: GameServer) -> None:
     """
     Handle keyboard input for server commands.
@@ -782,8 +1134,9 @@ async def keyboard_input_handler(server: GameServer) -> None:
     """
     logger.info("Keyboard command handler started. Available commands:")
     logger.info("  'quit' - Stop the server")
-    logger.info("  'start' - Force start game (requires at least 1 player)")
-    logger.info("  'reset' - Reset game state and wait for new players")
+    logger.info("  'games' - List all active games")
+    logger.info("  'create <game_id>' - Create a new game")
+    logger.info("  'start <game_id>' - Force start a specific game")
     logger.info("  'status' - Show current server status")
     logger.info("  'help' - Show this help message")
     
@@ -801,45 +1154,88 @@ async def keyboard_input_handler(server: GameServer) -> None:
                     server.shutdown_requested = True
                     break
                     
-                elif command == "start":
-                    if server.game_started:
-                        logger.warning("Game is already running")
-                    elif len(server.bot_connections) == 0:
-                        logger.warning("Cannot start game - no players connected")
+                elif command == "games":
+                    games = server.list_games()
+                    if not games:
+                        logger.info("No active games")
                     else:
-                        logger.info(f"Force starting game with {len(server.bot_connections)} players")
-                        success = server.force_start_game()
-                        if success:
-                            logger.info("Game force-started successfully")
-                        else:
-                            logger.warning("Failed to force start game")
+                        logger.info(f"=== Active Games ({len(games)}) ===")
+                        for game_id in games:
+                            game = server.get_game(game_id)
+                            if game:
+                                status = "Active" if game.game_started else "Waiting"
+                                turn = game.game_state.current_turn if game.game_state else 0
+                                logger.info(f"  {game_id}: {status}, Turn {turn}, {len(game.bot_connections)} bots, {len(game.viewer_connections)} viewers")
                             
-                elif command == "reset":
-                    if server.game_started:
-                        logger.info("Resetting active game...")
-                    else:
-                        logger.info("Resetting server state...")
-                    server.reset_game()
-                    logger.info("Game reset complete")
+                elif command.startswith("create "):
+                    try:
+                        game_id = command.split(" ", 1)[1].strip()
+                        if not game_id:
+                            logger.warning("Game ID required: create <game_id>")
+                        else:
+                            game = server.create_game(game_id)
+                            logger.info(f"Created game {game_id} successfully")
+                    except ValueError as e:
+                        logger.warning(str(e))
+                    except IndexError:
+                        logger.warning("Game ID required: create <game_id>")
+                    except Exception as e:
+                        logger.error(f"Failed to create game: {e}")
+                            
+                elif command.startswith("reset "):
+                    try:
+                        game_id = command.split(" ", 1)[1].strip()
+                        game = server.get_game(game_id)
+                        if not game:
+                            logger.warning(f"Game {game_id} does not exist")
+                        else:
+                            game.reset_game()
+                            logger.info(f"Game {game_id} reset complete")
+                    except IndexError:
+                        logger.warning("Game ID required: reset <game_id>")
+                    except Exception as e:
+                        logger.error(f"Failed to reset game: {e}")
+                        
+                elif command.startswith("start "):
+                    try:
+                        game_id = command.split(" ", 1)[1].strip()
+                        game = server.get_game(game_id)
+                        if not game:
+                            logger.warning(f"Game {game_id} does not exist")
+                        elif game.game_started:
+                            logger.warning(f"Game {game_id} is already running")
+                        elif len(game.bot_connections) == 0:
+                            logger.warning(f"Cannot start game {game_id} - no players connected")
+                        else:
+                            logger.info(f"Force starting game {game_id} with {len(game.bot_connections)} players")
+                            success = game.force_start_game()
+                            if success:
+                                logger.info(f"Game {game_id} force-started successfully")
+                            else:
+                                logger.warning(f"Failed to force start game {game_id}")
+                    except IndexError:
+                        logger.warning("Game ID required: start <game_id>")
+                    except Exception as e:
+                        logger.error(f"Failed to start game: {e}")
                     
                 elif command == "status":
-                    game_status = "Active" if server.game_started else "Waiting"
-                    turn = server.game_state.current_turn if server.game_state else 0
-                    logger.info(f"=== Server Status ===")
-                    logger.info(f"Game Status: {game_status}")
-                    logger.info(f"Current Turn: {turn}")
-                    logger.info(f"Connected Bots: {len(server.bot_connections)}")
-                    logger.info(f"Connected Viewers: {len(server.viewer_connections)}")
-                    logger.info(f"Grid Size: {server.grid_width}x{server.grid_height}")
-                    logger.info(f"Turn Duration: {server.turn_duration_seconds}s")
-                    if server.bot_connections:
-                        logger.info(f"Bot Players: {list(server.bot_connections.keys())}")
+                    logger.info(f"=== Multi-Game Server Status ===")
+                    logger.info(f"Active Games: {len(server.games)}")
+                    logger.info(f"Total Connections: {len(server.connection_to_game)}")
+                    if server.games:
+                        total_bots = sum(len(game.bot_connections) for game in server.games.values())
+                        total_viewers = sum(len(game.viewer_connections) for game in server.games.values())
+                        logger.info(f"Total Bots: {total_bots}")
+                        logger.info(f"Total Viewers: {total_viewers}")
+                        logger.info(f"Games: {list(server.games.keys())}")
                     
                 elif command == "help":
                     logger.info("=== Available Commands ===")
                     logger.info("  'quit' or 'exit' - Stop the server")
-                    logger.info("  'start' - Force start game (requires at least 1 player)")
-                    logger.info("  'reset' - Reset game state and wait for new players")
+                    logger.info("  'games' - List all active games")
+                    logger.info("  'create <game_id>' - Create a new game")
+                    logger.info("  'start <game_id>' - Force start a specific game")
+                    logger.info("  'reset <game_id>' - Reset a specific game")
                     logger.info("  'status' - Show current server status")
                     logger.info("  'help' - Show this help message")
                     
@@ -873,28 +1269,29 @@ async def run_server(host: str = "localhost", port: int = 8765,
                     grid_width: int = 5, grid_height: int = 5, 
                     turn_duration: float = 1.0) -> None:
     """
-    Run the game server with keyboard command support.
+    Run the multi-game server with keyboard command support.
     
     Args:
         host: Host address to bind to
         port: Port to listen on
-        grid_width: Width of the game grid
-        grid_height: Height of the game grid
-        turn_duration: Duration of each turn in seconds
+        grid_width: Default width for new games
+        grid_height: Default height for new games
+        turn_duration: Default duration of each turn in seconds
     """
-    server = GameServer(grid_width=grid_width, grid_height=grid_height)
-    server.turn_duration_seconds = turn_duration
+    server = GameServer(default_grid_width=grid_width, default_grid_height=grid_height, 
+                       default_turn_duration=turn_duration)
     
-    logger.info(f"Starting game server on {host}:{port}")
-    logger.info(f"Grid size: {grid_width}x{grid_height}")
-    logger.info(f"Turn duration: {turn_duration}s")
-    logger.info(f"Grid generated with {len(server.game_state.graph.vertices)} vertices")
-    logger.info(f"Waiting for at least {server.minimum_players} bot connections...")
+    logger.info(f"Starting multi-game server on {host}:{port}")
+    logger.info(f"Default grid size: {grid_width}x{grid_height}")
+    logger.info(f"Default turn duration: {turn_duration}s")
     logger.info("")
-    logger.info("Server is ready for connections and keyboard commands.")
+    logger.info("Multi-game server is ready for connections and keyboard commands.")
     
     # Start the WebSocket server
     websocket_server = await websockets.serve(server.handle_client, host, port)
+    
+    # Start the cleanup task
+    server.start_cleanup_task()
     
     # Start the keyboard input handler
     keyboard_task = asyncio.create_task(keyboard_input_handler(server))
@@ -910,11 +1307,15 @@ async def run_server(host: str = "localhost", port: int = 8765,
     finally:
         logger.info("Shutting down server...")
         
-        # Cancel any running tasks
-        if server.grace_period_task and not server.grace_period_task.done():
-            server.grace_period_task.cancel()
-        if server.turn_timer_task and not server.turn_timer_task.done():
-            server.turn_timer_task.cancel()
+        # Stop cleanup task
+        server.stop_cleanup_task()
+        
+        # Cancel any running tasks in all games
+        for game in server.games.values():
+            if game.grace_period_task and not game.grace_period_task.done():
+                game.grace_period_task.cancel()
+            if game.turn_timer_task and not game.turn_timer_task.done():
+                game.turn_timer_task.cancel()
         
         # Close WebSocket server
         websocket_server.close()
@@ -924,15 +1325,16 @@ async def run_server(host: str = "localhost", port: int = 8765,
         if not keyboard_task.done():
             keyboard_task.cancel()
         
-        # Notify any remaining clients
-        await server.broadcast_to_bots({
-            "type": "server_shutdown",
-            "message": "Server is shutting down"
-        })
-        await server.broadcast_to_viewers({
-            "type": "server_shutdown", 
-            "message": "Server is shutting down"
-        })
+        # Notify any remaining clients in all games
+        for game in server.games.values():
+            await game.broadcast_to_bots({
+                "type": "server_shutdown",
+                "message": "Server is shutting down"
+            })
+            await game.broadcast_to_viewers({
+                "type": "server_shutdown", 
+                "message": "Server is shutting down"
+            })
         
         logger.info("Server shutdown complete")
 

@@ -253,6 +253,7 @@
             border-bottom: 1px solid rgba(147, 161, 161, 0.3); /* Solarized light base1 */
         }
 
+
         @media (max-width: 768px) {
             .container {
                 flex-direction: column;
@@ -326,6 +327,7 @@
             constructor() {
                 this.socket = null;
                 this.gameState = null;
+                this.gameId = this.getGameIdFromURL();
                 this.canvas = document.getElementById('gameCanvas');
                 this.ctx = this.canvas.getContext('2d');
                 this.playerColors = {};
@@ -350,10 +352,35 @@
                 this.movingUnits = []; // Units currently animating
                 this.unitGenerationAnimations = []; // +Weight text animations
                 
+                
                 this.setupCanvas();
+                this.updateUIWithGameId();
                 this.connectToServer();
                 this.setupResizeHandler();
                 this.startRenderLoop();
+            }
+
+            getGameIdFromURL() {
+                const urlParams = new URLSearchParams(window.location.search);
+                return urlParams.get('game') || 'default';
+            }
+            
+            updateUIWithGameId() {
+                // Update page title and header to show game ID (hide "default" for cleaner UI)
+                const isDefaultGame = this.gameId === 'default';
+                const titleText = isDefaultGame ? 'Turn-Based Strategy Game' : `Turn-Based Strategy Game - ${this.gameId}`;
+                
+                document.title = titleText;
+                const header = document.querySelector('h1');
+                if (header) {
+                    header.textContent = titleText;
+                }
+                
+                // Update game ID display (show "default" in the info area but not in title)
+                const gameIdElement = document.getElementById('gameId');
+                if (gameIdElement) {
+                    gameIdElement.textContent = this.gameId;
+                }
             }
 
             startRenderLoop() {
@@ -627,18 +654,19 @@
             }
 
             connectToServer(url = 'ws://localhost:8765') {
-                this.addLogEntry('Attempting to connect to game server...', 'system');
+                this.addLogEntry(`Attempting to connect to game server for game ${this.gameId}...`, 'system');
                 
                 try {
                     this.socket = new WebSocket(url);
                     
                     this.socket.onopen = () => {
                         this.updateConnectionStatus('connected', 'Connected to game server');
-                        this.addLogEntry('Successfully connected as viewer', 'game-event');
+                        this.addLogEntry(`Successfully connected as viewer for game ${this.gameId}`, 'game-event');
                         
-                        // Join as viewer
+                        // Join as viewer with game ID
                         this.socket.send(JSON.stringify({
-                            type: 'join_as_viewer'
+                            type: 'join_as_viewer',
+                            game_id: this.gameId
                         }));
                     };
                     
@@ -653,7 +681,7 @@
                     
                     this.socket.onclose = () => {
                         this.updateConnectionStatus('disconnected', 'Disconnected from server');
-                        this.addLogEntry('Connection lost. Reconnecting in 3 seconds...', 'system');
+                        this.addLogEntry(`Connection lost for game ${this.gameId}. Reconnecting in 3 seconds...`, 'system');
                         
                         // Attempt reconnection after 3 seconds
                         setTimeout(() => {
@@ -686,9 +714,13 @@
                         break;
                     case 'game_over':
                         this.showGameResult(data.final_rankings);
+                        this.addLogEntry('Game ended - This game will be removed in 60 seconds', 'system');
                         break;
                     case 'game_reset':
                         this.handleGameReset();
+                        break;
+                    case 'game_created':
+                        this.addLogEntry(`Game ${this.gameId} created successfully`, 'game-event');
                         break;
                     case 'error':
                         this.addLogEntry(`Server error: ${data.message}`, 'system');
@@ -736,7 +768,7 @@
                 ctx.clearRect(0, 0, rect.width, rect.height);
                 
                 // Add log entry
-                this.addLogEntry('Game has been reset', 'game-event');
+                this.addLogEntry(`Game ${this.gameId} has been reset`, 'game-event');
             }
 
             handleTurnProcessed(turnData) {
@@ -1298,6 +1330,7 @@
                     this.updatePlayers(this.gameState.players);
                 }
             }
+
 
             addLogEntry(message, type = '') {
                 const gameLog = document.getElementById('gameLog');
