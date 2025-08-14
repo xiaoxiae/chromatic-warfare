@@ -29,6 +29,8 @@ import asyncio
 import json
 import logging
 import websockets
+import random
+import string
 from typing import List, Dict, Optional, Tuple, Any, Callable
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
@@ -229,7 +231,7 @@ class GameBot(ABC):
     and provides a clean interface for bot implementation.
     """
     
-    def __init__(self, player_id: str, game_id: str = None, server_url: str = "ws://localhost:8765"):
+    def __init__(self, game_id: str = None, player_id: Optional[str] = None, server_url: str = "ws://localhost:8765"):
         """
         Initialize the bot.
         
@@ -238,6 +240,10 @@ class GameBot(ABC):
             game_id: ID of the game to join (if None, will join "default" game)
             server_url: WebSocket URL of the game server
         """
+        if not player_id:
+            random_string = ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
+            player_id = str(self.__class__.__name__) + " " + random_string
+
         self.player_id = player_id
         self.game_id = game_id if game_id is not None else "default"
         self.server_url = server_url

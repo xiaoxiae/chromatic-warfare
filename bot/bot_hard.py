@@ -123,7 +123,7 @@ class HardBot(GameBot):
 def main():
     game_id = sys.argv[1] if len(sys.argv) > 1 else None
     
-    bot = HardBot("hard_bot", game_id)
+    bot = HardBot(game_id)
     bot.run()
 
 

@@ -38,7 +38,7 @@ class EasyBot(GameBot):
 def main():
     game_id = sys.argv[1] if len(sys.argv) > 1 else None
 
-    bot = EasyBot(f"easy_bot", game_id)
+    bot = EasyBot(game_id)
     bot.run()
 
 

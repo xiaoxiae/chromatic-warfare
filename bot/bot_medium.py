@@ -65,7 +65,7 @@ class MediumBot(GameBot):
 def main():
     game_id = sys.argv[1] if len(sys.argv) > 1 else None
     
-    bot = MediumBot("medium_bot", game_id)
+    bot = MediumBot(game_id)
     bot.run()
 
 
