@@ -11,6 +11,7 @@ import logging
 import websockets
 import sys
 import time
+import random
 from typing import Dict, Set, Optional, Any
 from websockets.server import WebSocketServerProtocol
 from core import GameState, GameEngine, Command, PlayerStatus
@@ -91,8 +92,134 @@ class GameInstance:
         # Game control
         self.shutdown_requested = False
         self.game_ended_time: Optional[float] = None  # Timestamp when game ended
+
+        self.spawned_bots: List[asyncio.Task] = []  # Track spawned bot tasks
         
         logger.info(f"Game instance {self.game_id} created with grid {grid_width}x{grid_height}")
+
+    async def spawn_bots(self, num_bots: int, difficulty: str, requesting_player: str) -> bool:
+        """
+        Spawn AI bots to join this game.
+        
+        Args:
+            num_bots: Number of bots to spawn
+            difficulty: Difficulty level ("easy", "medium", or "hard")
+            requesting_player: Player ID who requested the bots
+            
+        Returns:
+            True if bots were spawned successfully
+        """
+        try:
+            if self.game_started:
+                logger.warning(f"Game {self.game_id}: Cannot spawn bots - game already started")
+                return False
+            
+            if num_bots < 1 or num_bots > 7:  # Reasonable limits
+                logger.warning(f"Game {self.game_id}: Invalid number of bots requested: {num_bots}")
+                return False
+            
+            if difficulty not in ["easy", "medium", "hard"]:
+                logger.warning(f"Game {self.game_id}: Invalid difficulty requested: {difficulty}")
+                return False
+            
+            logger.info(f"Game {self.game_id}: Spawning {num_bots} {difficulty} bots (requested by {requesting_player})")
+            
+            # Import the appropriate bot class
+            try:
+                if difficulty == "easy":
+                    from bot.easy import EasyBot
+                    bot_class = EasyBot
+                    bot_prefix = "EasyBot"
+                elif difficulty == "medium":
+                    from bot.medium import MediumBot
+                    bot_class = MediumBot
+                    bot_prefix = "MediumBot"
+                elif difficulty == "hard":
+                    from bot.hard import HardBot
+                    bot_class = HardBot
+                    bot_prefix = "HardBot"
+            except ImportError as e:
+                logger.error(f"Game {self.game_id}: Failed to import {difficulty} bot: {e}")
+                await self.send_to_bot(requesting_player, {
+                    "type": "error",
+                    "message": f"Failed to load {difficulty} AI bots"
+                })
+                return False
+            
+            # Spawn the bots
+            for i in range(num_bots):
+                bot_id = f"{bot_prefix}_{i+1}_{self.game_id}"
+                bot_task = asyncio.create_task(self._run_bot(bot_class, bot_id))
+                self.spawned_bots.append(bot_task)
+            
+            # Notify requesting player
+            await self.send_to_bot(requesting_player, {
+                "type": "bots_spawned",
+                "num_bots": num_bots,
+                "difficulty": difficulty,
+                "message": f"Spawned {num_bots} {difficulty} AI bots"
+            })
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Game {self.game_id}: Error spawning bots: {e}")
+            await self.send_to_bot(requesting_player, {
+                "type": "error",
+                "message": "Failed to spawn AI bots"
+            })
+            return False
+
+    async def _run_bot(self, bot_class, bot_id: str) -> None:
+        """
+        Run a bot instance in this game.
+        
+        Args:
+            bot_class: Class of the bot to instantiate
+            bot_id: Unique ID for this bot instance
+        """
+        try:
+            # Create bot with connection to localhost (assuming server is local)
+            bot = bot_class(game_id=self.game_id, player_id=bot_id, server_url="ws://localhost:8765")
+            
+            # Set up bot to automatically start when ready
+            original_on_connection_confirmed = bot.on_connection_confirmed
+            
+            def on_bot_connected(message):
+                if original_on_connection_confirmed:
+                    original_on_connection_confirmed(message)
+                
+                # If this is the first bot and we now have minimum players, start immediately
+                asyncio.create_task(self._check_auto_start())
+            
+            bot.on_connection_confirmed = on_bot_connected
+            
+            # Run the bot
+            await bot._run_async()
+            
+        except Exception as e:
+            logger.error(f"Game {self.game_id}: Bot {bot_id} crashed: {e}")
+    
+    async def _check_auto_start(self) -> None:
+        """Check if we should auto-start the game with bots."""
+        try:
+            # Small delay to allow all bots to connect
+            await asyncio.sleep(0.5)
+            
+            if (not self.game_started and 
+                len(self.bot_connections) >= self.minimum_players and
+                len(self.spawned_bots) > 0):
+                
+                logger.info(f"Game {self.game_id}: Auto-starting with {len(self.bot_connections)} players (including bots)")
+                
+                # Cancel grace period and start immediately
+                if self.grace_period_task and not self.grace_period_task.done():
+                    self.grace_period_task.cancel()
+                
+                await self.start_game()
+                
+        except Exception as e:
+            logger.error(f"Game {self.game_id}: Error in auto-start: {e}")
     
     def get_total_connections(self) -> int:
         """Get total number of connections (bots + viewers)."""
@@ -228,6 +355,13 @@ class GameInstance:
             True if connection was added successfully, False otherwise
         """
         try:
+            # If game has ended, reset it to allow new connections (useful for testing)
+            if self.game_state and self.game_state.status.value == "ended":
+                logger.info(f"Game {self.game_id}: Auto-resetting ended game for new bot connection {player_id}")
+                self.reset_game()
+                # Small delay to ensure reset is complete
+                await asyncio.sleep(0.1)
+            
             if self.game_started:
                 await self.send_error(websocket, "Game has already started")
                 return False
@@ -369,6 +503,55 @@ class GameInstance:
             logger.error(f"Error adding viewer connection: {e}")
             return False
     
+    def has_only_bots_remaining(self) -> bool:
+        """
+        Check if the game only has AI bots remaining (no human players).
+        
+        Returns:
+            True if only bots are connected
+        """
+        if not self.bot_connections:
+            return False
+        
+        # Check if all connected players are spawned bots
+        for player_id in self.bot_connections.keys():
+            # Spawned bots have names like "EasyBot_1_game_id", "MediumBot_2_game_id", etc.
+            if not any(player_id.startswith(f"{bot_type}Bot_") for bot_type in ["Easy", "Medium", "Hard"]):
+                return False
+        
+        return True
+
+    async def check_and_handle_bot_only_game(self) -> None:
+        """
+        Check if game only has bots and handle appropriately.
+        """
+        try:
+            if self.has_only_bots_remaining():
+                logger.info(f"Game {self.game_id}: Only bots remaining, terminating game")
+                
+                # Cancel any running tasks
+                if self.grace_period_task and not self.grace_period_task.done():
+                    self.grace_period_task.cancel()
+                if self.turn_timer_task and not self.turn_timer_task.done():
+                    self.turn_timer_task.cancel()
+                
+                # Cancel all spawned bot tasks
+                for bot_task in self.spawned_bots:
+                    if not bot_task.done():
+                        bot_task.cancel()
+                
+                # Mark game as ended
+                if self.game_state:
+                    self.game_state.status = self.game_state.status.__class__.ENDED
+                self.game_ended_time = time.time()
+                
+                # Clear connections (bots will disconnect automatically when their tasks are cancelled)
+                self.bot_connections.clear()
+                self.connection_to_player.clear()
+                
+        except Exception as e:
+            logger.error(f"Error handling bot-only game: {e}")
+
     async def remove_connection(self, websocket: WebSocketServerProtocol) -> None:
         """
         Clean up a disconnected client.
@@ -390,6 +573,7 @@ class GameInstance:
                 if not self.game_started:
                     # During grace period, remove the player completely
                     await self.remove_player(player_id)
+                    await self.check_and_handle_bot_only_game()
                 else:
                     # During game, just mark as disconnected
                     del self.connection_to_player[websocket]
@@ -401,8 +585,11 @@ class GameInstance:
                         # Update player status in game
                         if player_id in self.game_state.players:
                             self.game_state.players[player_id].status = PlayerStatus.DISCONNECTED
-                            asyncio.create_task(self.broadcast_game_state())
+                            await self.broadcast_game_state()
                         
+                        # Check if only bots remain and handle appropriately
+                        await self.check_and_handle_bot_only_game()
+            
         except Exception as e:
             logger.error(f"Error removing connection: {e}")
     
@@ -514,10 +701,6 @@ class GameInstance:
     async def handle_message(self, websocket: WebSocketServerProtocol, message: str) -> None:
         """
         Parse and route incoming messages.
-        
-        Args:
-            websocket: WebSocket connection that sent the message
-            message: Raw message string
         """
         try:
             data = json.loads(message)
@@ -535,6 +718,9 @@ class GameInstance:
                 
             elif message_type == "move_command":
                 await self.handle_move_command(websocket, data)
+            
+            elif message_type == "request_bots":
+                await self.handle_request_bots(websocket, data)
                 
             else:
                 await self.send_error(websocket, f"Unknown message type: {message_type}")
@@ -544,6 +730,39 @@ class GameInstance:
         except Exception as e:
             logger.error(f"Error handling message: {e}")
             await self.send_error(websocket, "Internal server error")
+
+    async def handle_request_bots(self, websocket: WebSocketServerProtocol, data: Dict[str, Any]) -> None:
+        """
+        Handle request to spawn AI bots.
+        
+        Args:
+            websocket: WebSocket connection that sent the request
+            data: Parsed request data
+        """
+        try:
+            if websocket not in self.connection_to_player:
+                await self.send_error(websocket, "Not registered as bot")
+                return
+            
+            requesting_player = self.connection_to_player[websocket]
+            num_bots = data.get("num_bots", 1)
+            difficulty = data.get("difficulty", "easy")
+            
+            if not isinstance(num_bots, int) or num_bots < 1:
+                await self.send_error(websocket, "num_bots must be a positive integer")
+                return
+            
+            if difficulty not in ["easy", "medium", "hard"]:
+                await self.send_error(websocket, "difficulty must be 'easy', 'medium', or 'hard'")
+                return
+            
+            success = await self.spawn_bots(num_bots, difficulty, requesting_player)
+            if not success:
+                await self.send_error(websocket, f"Failed to spawn {difficulty} bots")
+                
+        except Exception as e:
+            logger.error(f"Error handling request_bots: {e}")
+            await self.send_error(websocket, "Error processing bot request")
     
     async def handle_move_command(self, websocket: WebSocketServerProtocol, data: Dict[str, Any]) -> None:
         """
@@ -962,10 +1181,6 @@ class GameServer:
     async def handle_message(self, websocket: WebSocketServerProtocol, message: str) -> None:
         """
         Parse and route incoming messages to the appropriate game.
-        
-        Args:
-            websocket: WebSocket connection that sent the message
-            message: Raw message string
         """
         try:
             data = json.loads(message)
@@ -978,6 +1193,9 @@ class GameServer:
                 await self.handle_viewer_join(websocket, data)
                 
             elif message_type == "move_command":
+                await self.route_to_game(websocket, data)
+            
+            elif message_type == "request_bots":
                 await self.route_to_game(websocket, data)
                 
             elif message_type == "create_game":
@@ -1014,11 +1232,12 @@ class GameServer:
             # Auto-create game if it doesn't exist
             try:
                 game = self.create_game(game_id)
+                logger.info(f"Auto-created game {game_id} for bot {player_id}")
             except Exception as e:
                 await self.send_error(websocket, f"Failed to create game {game_id}: {e}")
                 return
         
-        # Add bot to the specific game
+        # Add bot to the specific game (will auto-reset if game ended)
         success = await game.add_bot_connection(websocket, player_id)
         if success:
             self.connection_to_game[websocket] = game_id
@@ -1120,8 +1339,11 @@ class GameServer:
             return
         
         # Forward the message to the game instance
-        if data.get("type") == "move_command":
+        message_type = data.get("type")
+        if message_type == "move_command":
             await game.handle_move_command(websocket, data)
+        elif message_type == "request_bots":
+            await game.handle_request_bots(websocket, data)
     
     async def cleanup_connection(self, websocket: WebSocketServerProtocol) -> None:
         """Clean up a disconnected client."""
@@ -1595,8 +1817,6 @@ async def run_server(host: str = "localhost", port: int = 8765,
 
 
 if __name__ == "__main__":
-    import sys
-    
     if len(sys.argv) > 1 and sys.argv[1] == "test":
         # Run test client
         asyncio.run(test_client())

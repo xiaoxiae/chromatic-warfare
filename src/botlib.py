@@ -231,7 +231,8 @@ class GameBot(ABC):
     and provides a clean interface for bot implementation.
     """
     
-    def __init__(self, game_id: str = None, player_id: Optional[str] = None, server_url: str = "ws://localhost:8765"):
+    def __init__(self, game_id: str = None, player_id: Optional[str] = None, server_url: str = "ws://localhost:8765",
+                 request_bots: Optional[Tuple[int, str]] = None):
         """
         Initialize the bot.
         
@@ -239,6 +240,7 @@ class GameBot(ABC):
             player_id: Unique identifier for this bot
             game_id: ID of the game to join (if None, will join "default" game)
             server_url: WebSocket URL of the game server
+            request_bots: Tuple of (num_bots, difficulty) to request when connecting
         """
         if not player_id:
             random_string = ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
@@ -250,6 +252,7 @@ class GameBot(ABC):
         self.websocket = None
         self.game_state = None
         self.running = False
+        self.request_bots_config = request_bots
         
         # Callbacks
         self.on_connection_confirmed: Optional[Callable[[Dict], None]] = None
@@ -258,6 +261,47 @@ class GameBot(ABC):
         self.on_turn_processed: Optional[Callable[[Dict], None]] = None
         
         logger.info(f"Bot {self.player_id} initialized for game {self.game_id}")
+
+    async def request_bots(self, num_bots: int = 1, difficulty: str = "easy") -> bool:
+        """
+        Request the server to add bots to the current game.
+        
+        Args:
+            num_bots: Number of bots to add
+            difficulty: Difficulty level ("easy", "medium", or "hard")
+            
+        Returns:
+            True if request was sent successfully
+        """
+        if not self.websocket:
+            logger.error(f"[{self.player_id}] Cannot request bots: not connected")
+            return False
+        
+        if difficulty not in ["easy", "medium", "hard"]:
+            logger.error(f"[{self.player_id}] Invalid difficulty: {difficulty}")
+            return False
+        
+        message = {
+            "type": "request_bots",
+            "num_bots": num_bots,
+            "difficulty": difficulty
+        }
+        
+        try:
+            await self.websocket.send(json.dumps(message))
+            logger.info(f"[{self.player_id}] Requested {num_bots} {difficulty} bots")
+            return True
+        except Exception as e:
+            logger.error(f"[{self.player_id}] Failed to request bots: {e}")
+            return False
+    
+    def request_bots_sync(self, num_bots: int = 1, difficulty: str = "easy") -> None:
+        """
+        Synchronous wrapper for requesting bots.
+        Can be called from play_turn or other sync methods.
+        """
+        if self.websocket:
+            asyncio.create_task(self.request_bots(num_bots, difficulty))
     
     @abstractmethod
     def play_turn(self, game_state: GameState) -> List[Command]:
@@ -420,6 +464,12 @@ class GameBot(ABC):
             game_id = message.get("game_id")
             starting_vertex = message.get("starting_vertex")
             logger.info(f"[{self.player_id}] Connection confirmed for game {game_id}, assigned vertex {starting_vertex}")
+            
+            # Request bots if configured to do so
+            if self.request_bots_config:
+                num_bots, difficulty = self.request_bots_config
+                await self.request_bots(num_bots, difficulty)
+            
             if self.on_connection_confirmed:
                 self.on_connection_confirmed(message)
                 
@@ -500,8 +550,15 @@ class GameBot(ABC):
         finally:
             self.running = False
     
-    def run(self) -> None:
-        """Run the bot (blocking call)."""
+    def run(self, request_bots: Optional[Tuple[int, str]] = None) -> None:
+        """
+        Run the bot (blocking call).
+        
+        Args:
+            request_bots: Optional tuple of (num_bots, difficulty) to request AI opponents
+        """
+        if request_bots:
+            self.request_bots_config = request_bots
         asyncio.run(self._run_async())
     
     async def _run_async(self) -> None:

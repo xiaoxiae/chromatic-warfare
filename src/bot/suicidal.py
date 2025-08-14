@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
+import os
 import sys
-from botlib import GameBot, GameState, Command
 from typing import List
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from botlib import GameBot, GameState, Command
 
 
 class SuicidalBot(GameBot):

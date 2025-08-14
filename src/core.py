@@ -741,6 +741,110 @@ class GameState:
             "final_rankings": self.final_rankings,
         }
 
+    def get_starting_vertex(self) -> Optional[Vertex]:
+        """
+        Select a fair starting vertex for a new player.
+        
+        Args:
+            graph: The game graph containing vertices and edges
+            
+        Returns:
+            The ID of the selected starting vertex, or None if no vertices exist
+            
+        Logic:
+            - If no players exist (no controlled vertices), pick the vertex that maximizes
+              the sum of squared distances to all other vertices
+            - If players exist, pick the vertex that maximizes the sum of squared
+              distances to all controlled vertices
+        """
+        if not self.graph.vertices:
+            return None
+        
+        # Get all controlled vertices (vertices with players)
+        controlled_vertices = [v for v in self.graph.vertices.values() if v.controller is not None]
+        
+        # Get all uncontrolled vertices (potential starting positions)
+        uncontrolled_vertices = [v for v in self.graph.vertices.values() if v.controller is None]
+        
+        if not uncontrolled_vertices:
+            return None  # No available starting positions
+        
+        best_vertex_id = None
+        best_score = float('-inf')
+        
+        for candidate in uncontrolled_vertices:
+            if not controlled_vertices:
+                # No players yet - maximize distance to all other vertices
+                score = self._calculate_distance_score_to_all(candidate, self.graph.vertices)
+            else:
+                # Players exist - maximize distance to controlled vertices
+                score = self._calculate_distance_score_to_controlled(candidate, controlled_vertices)
+            
+            if score > best_score:
+                best_score = score
+                best_vertex_id = candidate.id
+        
+        return self.graph.vertices[best_vertex_id]
+
+
+    def _calculate_distance_score_to_all(self, candidate: Vertex, all_vertices: Dict[int, Vertex]) -> float:
+        """
+        Calculate the sum of squared distances from candidate to all other vertices.
+        
+        Args:
+            candidate: The vertex to calculate distances from
+            all_vertices: Dictionary of all vertices in the graph
+            
+        Returns:
+            Sum of squared Euclidean distances to all other vertices
+        """
+        total_score = 0.0
+        candidate_pos = candidate.position
+        
+        for vertex in all_vertices.values():
+            if vertex.id != candidate.id:
+                distance_squared = self._squared_euclidean_distance(candidate_pos, vertex.position)
+                total_score += distance_squared
+        
+        return total_score
+
+
+    def _calculate_distance_score_to_controlled(self, candidate: Vertex, controlled_vertices: List[Vertex]) -> float:
+        """
+        Calculate the sum of squared distances from candidate to all controlled vertices.
+        
+        Args:
+            candidate: The vertex to calculate distances from
+            controlled_vertices: List of vertices controlled by existing players
+            
+        Returns:
+            Sum of squared Euclidean distances to all controlled vertices
+        """
+        total_score = 0.0
+        candidate_pos = candidate.position
+        
+        for controlled_vertex in controlled_vertices:
+            distance_squared = self._squared_euclidean_distance(candidate_pos, controlled_vertex.position)
+            total_score += distance_squared
+        
+        return total_score
+
+
+    def _squared_euclidean_distance(self, pos1: tuple, pos2: tuple) -> float:
+        """
+        Calculate the squared Euclidean distance between two positions.
+        
+        Args:
+            pos1: (x, y) coordinates of first position
+            pos2: (x, y) coordinates of second position
+            
+        Returns:
+            Squared Euclidean distance
+        """
+        dx = pos1[0] - pos2[0]
+        dy = pos1[1] - pos2[1]
+        return dx * dx + dy * dy
+
 
 class GameEngine:
     """

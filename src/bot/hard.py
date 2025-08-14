@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
+import os
 import sys
-from botlib import GameBot, GameState, Command
 from typing import List
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from botlib import GameBot, GameState, Command
 
 
 class HardBot(GameBot):
@@ -123,7 +126,7 @@ class HardBot(GameBot):
 def main():
     game_id = sys.argv[1] if len(sys.argv) > 1 else None
     
-    bot = HardBot(game_id)
+    bot = HardBot(game_id, request_bots=(1, "easy"))
     bot.run()
 
 

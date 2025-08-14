@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Turn-Based Strategy Game - Live Viewer</title>
+    <title>Chromatic Warfare</title>
     <style>
         * {
             margin: 0;
@@ -252,29 +252,13 @@
             padding: 8px 0;
             border-bottom: 1px solid rgba(147, 161, 161, 0.3); /* Solarized light base1 */
         }
-
-
-        @media (max-width: 768px) {
-            .container {
-                flex-direction: column;
-            }
-            
-            .sidebar {
-                width: 100%;
-                max-height: 300px;
-            }
-            
-            .game-area {
-                order: -1;
-            }
-        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="game-area">
             <div class="header">
-                <h1>Turn-Based Strategy Game</h1>
+                <h1>Chromatic Warfare</h1>
                 <div class="game-info">
                     <div class="info-item">
                         <span class="status-indicator" id="connectionStatus"></span>
@@ -374,7 +358,7 @@
             updateUIWithGameId() {
                 // Update page title and header to show game ID (hide "default" for cleaner UI)
                 const isDefaultGame = this.gameId === 'default';
-                const titleText = isDefaultGame ? 'Turn-Based Strategy Game' : `Turn-Based Strategy Game - ${this.gameId}`;
+                const titleText = isDefaultGame ? 'Chromatic Warfare' : `Chromatic Warfare - ${this.gameId}`;
                 
                 document.title = titleText;
                 const header = document.querySelector('h1');
