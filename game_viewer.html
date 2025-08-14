@@ -13,8 +13,8 @@
 
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            color: #ffffff;
+            background: #fdf6e3; /* Solarized light base3 */
+            color: #657b83; /* Solarized light base00 */
             overflow: hidden;
             height: 100vh;
         }
@@ -33,16 +33,17 @@
         }
 
         .header {
-            background: rgba(0, 0, 0, 0.3);
+            background: rgba(238, 232, 213, 0.9); /* Solarized light base2 with transparency */
             backdrop-filter: blur(10px);
             padding: 15px 25px;
-            border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+            border-bottom: 2px solid rgba(147, 161, 161, 0.3); /* Solarized light base1 */
         }
 
         .header h1 {
             font-size: 24px;
             font-weight: 300;
             margin-bottom: 5px;
+            color: #586e75; /* Solarized light base01 */
         }
 
         .game-info {
@@ -62,16 +63,16 @@
             width: 8px;
             height: 8px;
             border-radius: 50%;
-            background: #4ade80;
+            background: #859900; /* Solarized green */
             animation: pulse 2s infinite;
         }
 
         .status-indicator.disconnected {
-            background: #ef4444;
+            background: #dc322f; /* Solarized red */
         }
 
         .status-indicator.waiting {
-            background: #fbbf24;
+            background: #b58900; /* Solarized yellow */
         }
 
         @keyframes pulse {
@@ -82,7 +83,7 @@
         .canvas-container {
             flex: 1;
             position: relative;
-            background: rgba(0, 0, 0, 0.1);
+            background: rgba(147, 161, 161, 0.1); /* Solarized light base1 */
         }
 
         #gameCanvas {
@@ -93,23 +94,23 @@
 
         .sidebar {
             width: 300px;
-            background: rgba(0, 0, 0, 0.4);
+            background: rgba(238, 232, 213, 0.8); /* Solarized light base2 */
             backdrop-filter: blur(15px);
-            border-left: 2px solid rgba(255, 255, 255, 0.1);
+            border-left: 2px solid rgba(147, 161, 161, 0.3); /* Solarized light base1 */
             display: flex;
             flex-direction: column;
         }
 
         .sidebar-section {
             padding: 20px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            border-bottom: 1px solid rgba(147, 161, 161, 0.3); /* Solarized light base1 */
         }
 
         .sidebar-section h3 {
             font-size: 16px;
             font-weight: 500;
             margin-bottom: 15px;
-            color: #e5e7eb;
+            color: #586e75; /* Solarized light base01 */
         }
 
         .player-list {
@@ -119,22 +120,22 @@
         }
 
         .player-card {
-            background: rgba(255, 255, 255, 0.05);
+            background: rgba(147, 161, 161, 0.1); /* Solarized light base1 */
             border-radius: 8px;
             padding: 12px;
-            border-left: 4px solid #6b7280;
+            border-left: 4px solid #93a1a1; /* Solarized light base1 */
             transition: all 0.3s ease;
         }
 
         .player-card.active {
-            background: rgba(255, 255, 255, 0.1);
+            background: rgba(147, 161, 161, 0.2); /* Solarized light base1 */
             transform: translateY(-1px);
         }
 
         .player-card.eliminated {
             opacity: 0.6;
-            background: rgba(239, 68, 68, 0.1);
-            border-left-color: #ef4444;
+            background: rgba(220, 50, 47, 0.1); /* Solarized red */
+            border-left-color: #dc322f; /* Solarized red */
         }
 
         .player-name {
@@ -154,18 +155,18 @@
             font-size: 11px;
             padding: 2px 6px;
             border-radius: 10px;
-            background: rgba(74, 222, 128, 0.2);
-            color: #4ade80;
+            background: rgba(133, 153, 0, 0.2); /* Solarized green */
+            color: #859900; /* Solarized green */
         }
 
         .player-status.eliminated {
-            background: rgba(239, 68, 68, 0.2);
-            color: #ef4444;
+            background: rgba(220, 50, 47, 0.2); /* Solarized red */
+            color: #dc322f; /* Solarized red */
         }
 
         .player-status.disconnected {
-            background: rgba(251, 191, 36, 0.2);
-            color: #fbbf24;
+            background: rgba(181, 137, 0, 0.2); /* Solarized yellow */
+            color: #b58900; /* Solarized yellow */
         }
 
         .game-log {
@@ -177,22 +178,22 @@
         .log-entry {
             font-size: 12px;
             padding: 6px 0;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            border-bottom: 1px solid rgba(147, 161, 161, 0.1); /* Solarized light base1 */
             opacity: 0.8;
         }
 
         .log-entry.elimination {
-            color: #ef4444;
+            color: #dc322f; /* Solarized red */
             font-weight: 500;
         }
 
         .log-entry.game-event {
-            color: #4ade80;
+            color: #859900; /* Solarized green */
             font-weight: 500;
         }
 
         .log-entry.turn-data {
-            color: #fbbf24;
+            color: #b58900; /* Solarized yellow */
             font-weight: 500;
         }
 
@@ -200,7 +201,7 @@
             position: absolute;
             top: 20px;
             right: 20px;
-            background: rgba(0, 0, 0, 0.7);
+            background: rgba(238, 232, 213, 0.9); /* Solarized light base2 */
             backdrop-filter: blur(10px);
             padding: 10px 15px;
             border-radius: 20px;
@@ -209,6 +210,8 @@
             align-items: center;
             gap: 8px;
             z-index: 100;
+            color: #657b83; /* Solarized light base00 */
+            border: 1px solid rgba(147, 161, 161, 0.3); /* Solarized light base1 */
         }
 
         .game-over-overlay {
@@ -217,7 +220,7 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0, 0, 0, 0.8);
+            background: rgba(253, 246, 227, 0.9); /* Solarized light base3 */
             backdrop-filter: blur(10px);
             display: none;
             flex-direction: column;
@@ -227,17 +230,18 @@
         }
 
         .game-over-content {
-            background: rgba(255, 255, 255, 0.1);
+            background: rgba(238, 232, 213, 0.9); /* Solarized light base2 */
             border-radius: 15px;
             padding: 40px;
             text-align: center;
             max-width: 500px;
+            border: 2px solid rgba(147, 161, 161, 0.3); /* Solarized light base1 */
         }
 
         .game-over-content h2 {
             font-size: 36px;
             margin-bottom: 20px;
-            background: linear-gradient(45deg, #fbbf24, #f59e0b);
+            background: linear-gradient(45deg, #b58900, #cb4b16); /* Solarized yellow to orange */
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
@@ -255,7 +259,7 @@
 
         .ranking-item {
             padding: 8px 0;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            border-bottom: 1px solid rgba(147, 161, 161, 0.3); /* Solarized light base1 */
         }
 
         @media (max-width: 768px) {
@@ -339,8 +343,8 @@
                 this.ctx = this.canvas.getContext('2d');
                 this.playerColors = {};
                 this.colorPalette = [
-                    '#ef4444', '#3b82f6', '#10b981', '#f59e0b', 
-                    '#8b5cf6', '#06b6d4', '#f97316', '#84cc16'
+                    '#dc322f', '#268bd2', '#859900', '#b58900', 
+                    '#6c71c4', '#2aa198', '#cb4b16', '#d33682'
                 ];
                 this.colorIndex = 0;
                 
@@ -356,6 +360,7 @@
                 this.displayedVertices = new Map(); // Current displayed state
                 this.targetVertices = new Map(); // Target state after animations
                 this.movingUnits = []; // Units currently animating
+                this.unitGenerationAnimations = []; // +Weight text animations
                 
                 this.setupCanvas();
                 this.connectToServer();
@@ -403,6 +408,7 @@
                         console.log('Finishing state change phase');
                         this.finishStateChangePhase();
                         this.currentPhase = 'generation';
+                        this.startGenerationAnimations();
                     }
                     this.updateGenerationAnimation((progress - stateChangeEnd) / (generationEnd - stateChangeEnd));
                 } else {
@@ -441,6 +447,32 @@
                 });
             }
 
+            startGenerationAnimations() {
+                // Initialize +Weight text animations
+                this.unitGenerationAnimations = [];
+                
+                if (this.animationData && this.animationData.unit_generation) {
+                    this.animationData.unit_generation.forEach(genData => {
+                        const displayVertex = this.displayedVertices.get(genData.vertex_id);
+                        if (displayVertex) {
+                            // Get vertex position for the animation
+                            const vertexPos = this.getVertexScreenPosition(genData.vertex_id);
+                            if (vertexPos) {
+                                this.unitGenerationAnimations.push({
+                                    vertexId: genData.vertex_id,
+                                    weight: displayVertex.weight || 1,
+                                    x: vertexPos.x,
+                                    y: vertexPos.y,
+                                    startTime: 0, // Will be set relative to generation phase
+                                    alpha: 1.0,
+                                    offsetY: 0
+                                });
+                            }
+                        }
+                    });
+                }
+            }
+
             updateGenerationAnimation(progress) {
                 // Animate unit count increases
                 const easedProgress = this.easeInOutCubic(progress);
@@ -454,12 +486,53 @@
                             const startUnits = displayVertex.baseUnits || displayVertex.units;
                             const endUnits = targetVertex.units;
                             displayVertex.units = Math.floor(startUnits + (endUnits - startUnits) * easedProgress);
-                            
-                            // Add pulsing effect for generating vertices
-                            displayVertex.generationPulse = Math.sin(progress * Math.PI * 3) * 0.3 + 1.0;
                         }
                     });
                 }
+                
+                // Update +Weight text animations
+                this.unitGenerationAnimations.forEach(anim => {
+                    // Float upward and fade out
+                    anim.offsetY = -progress * 40; // Move up 40 pixels
+                    anim.alpha = 1.0 - progress; // Fade out completely
+                });
+            }
+
+            getVertexScreenPosition(vertexId) {
+                if (!this.gameState || !this.gameState.graph) return null;
+                
+                const canvas = this.canvas;
+                const rect = canvas.getBoundingClientRect();
+                const width = rect.width;
+                const height = rect.height;
+                const vertices = this.gameState.graph.vertices;
+                
+                if (vertices.length === 0) return null;
+                
+                const vertex = vertices.find(v => v.id === vertexId);
+                if (!vertex) return null;
+                
+                const minX = Math.min(...vertices.map(v => v.position[0]));
+                const maxX = Math.max(...vertices.map(v => v.position[0]));
+                const minY = Math.min(...vertices.map(v => v.position[1]));
+                const maxY = Math.max(...vertices.map(v => v.position[1]));
+                
+                const graphWidth = maxX - minX;
+                const graphHeight = maxY - minY;
+                
+                const padding = 60;
+                const scale = Math.min(
+                    (width - 2 * padding) / (graphWidth || 1),
+                    (height - 2 * padding) / (graphHeight || 1)
+                );
+                
+                const offsetX = (width - graphWidth * scale) / 2 - minX * scale;
+                const offsetY = (height - graphHeight * scale) / 2 - minY * scale;
+                
+                return {
+                    x: vertex.position[0] * scale + offsetX,
+                    y: vertex.position[1] * scale + offsetY
+                };
             }
 
             finishMovementPhase() {
@@ -492,10 +565,12 @@
                     if (targetVertex) {
                         displayVertex.units = targetVertex.units;
                         displayVertex.controller = targetVertex.controller;
-                        displayVertex.generationPulse = undefined;
                         displayVertex.baseUnits = undefined;
                     }
                 });
+                
+                // Clear generation animations
+                this.unitGenerationAnimations = [];
             }
 
             finishAnimation() {
@@ -503,6 +578,7 @@
                 this.animationData = null;
                 this.currentPhase = 'idle';
                 this.movingUnits = [];
+                this.unitGenerationAnimations = [];
                 
                 // Update the game state to match final values
                 if (this.gameState && this.gameState.graph) {
@@ -867,7 +943,7 @@
                 const offsetY = (height - graphHeight * scale) / 2 - minY * scale;
                 
                 // Draw edges first
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+                ctx.strokeStyle = 'rgba(101, 123, 131, 0.4)'; /* Solarized light base00 */
                 ctx.lineWidth = 2;
                 ctx.beginPath();
                 
@@ -901,35 +977,26 @@
                 // Draw moving units
                 this.renderMovingUnits();
                 
-                // Debug info
-                if (this.isAnimating) {
-                    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-                    ctx.font = '12px sans-serif';
-                    ctx.fillText('Animating: ' + this.currentPhase + ' (' + this.movingUnits.length + ' moving units)', 10, 30);
-                }
+                // Draw unit generation animations (+Weight text)
+                this.renderUnitGenerationAnimations();
             }
 
             renderVertex(vertex, scale, offsetX, offsetY) {
                 const ctx = this.ctx;
                 const x = vertex.position[0] * scale + offsetX;
                 const y = vertex.position[1] * scale + offsetY;
-                let radius = 25;
-                
-                // Apply generation pulse effect
-                if (vertex.generationPulse) {
-                    radius = radius * vertex.generationPulse;
-                }
+                const radius = 25;
                 
                 // Determine vertex color
-                let fillColor = 'rgba(100, 100, 100, 0.8)'; // neutral
+                let fillColor = 'rgba(147, 161, 161, 0.6)'; // Solarized light base1 for neutral
                 
                 if (vertex.controllerTransition !== undefined) {
                     // Animate color transition
-                    const oldColor = vertex.controller ? this.playerColors[vertex.controller] : 'rgba(100, 100, 100, 0.8)';
-                    const newColor = vertex.newController ? this.playerColors[vertex.newController] : 'rgba(100, 100, 100, 0.8)';
+                    const oldColor = vertex.controller ? this.playerColors[vertex.controller] : 'rgba(147, 161, 161, 0.6)';
+                    const newColor = vertex.newController ? this.playerColors[vertex.newController] : 'rgba(147, 161, 161, 0.6)';
                     fillColor = this.interpolateColor(oldColor, newColor, vertex.controllerTransition);
                 } else if (vertex.controller) {
-                    fillColor = this.playerColors[vertex.controller] || '#6b7280';
+                    fillColor = this.playerColors[vertex.controller] || '#93a1a1';
                 }
                 
                 // Draw vertex circle
@@ -937,21 +1004,16 @@
                 ctx.arc(x, y, radius, 0, 2 * Math.PI);
                 ctx.fillStyle = fillColor;
                 ctx.fill();
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+                ctx.strokeStyle = 'rgba(88, 110, 117, 0.8)'; /* Solarized light base01 */
                 ctx.lineWidth = 2;
                 ctx.stroke();
                 
                 // Draw unit count
-                ctx.fillStyle = '#ffffff';
+                ctx.fillStyle = '#fdf6e3'; /* Solarized light base3 for high contrast */
                 ctx.font = 'bold 14px sans-serif';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillText(vertex.units.toString(), x, y);
-                
-                // Draw vertex ID (smaller, below)
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-                ctx.font = '10px sans-serif';
-                ctx.fillText(vertex.id.toString(), x, y + radius + 15);
             }
 
             renderMovingUnits() {
@@ -968,16 +1030,56 @@
                     ctx.arc(unit.currentX, unit.currentY, 8, 0, 2 * Math.PI);
                     ctx.fillStyle = color;
                     ctx.fill();
-                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+                    ctx.strokeStyle = 'rgba(88, 110, 117, 0.8)'; /* Solarized light base01 */
                     ctx.lineWidth = 1;
                     ctx.stroke();
                     
                     // Draw unit count
-                    ctx.fillStyle = '#ffffff';
+                    ctx.fillStyle = '#fdf6e3'; /* Solarized light base3 */
                     ctx.font = 'bold 10px sans-serif';
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
                     ctx.fillText(unit.units.toString(), unit.currentX, unit.currentY);
+                    
+                    ctx.restore();
+                });
+            }
+
+            renderUnitGenerationAnimations() {
+                const ctx = this.ctx;
+                
+                this.unitGenerationAnimations.forEach(anim => {
+                    if (anim.alpha <= 0) return;
+                    
+                    ctx.save();
+                    ctx.globalAlpha = anim.alpha;
+                    
+                    // Draw +Weight text
+                    const text = `+${anim.weight}`;
+                    const x = anim.x;
+                    const y = anim.y + anim.offsetY;
+                    
+                    // Get the vertex color from displayed vertices
+                    const displayVertex = this.displayedVertices.get(anim.vertexId);
+                    let textColor = '#657b83'; /* Solarized light base00 as default */
+                    
+                    if (displayVertex && displayVertex.controller) {
+                        textColor = this.playerColors[displayVertex.controller] || '#657b83';
+                    }
+                    
+                    // Text styling
+                    ctx.fillStyle = textColor;
+                    ctx.font = 'bold 16px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    
+                    // Add text shadow for better visibility
+                    ctx.shadowColor = 'rgba(253, 246, 227, 0.8)'; /* Solarized light base3 */
+                    ctx.shadowBlur = 4;
+                    ctx.shadowOffsetX = 1;
+                    ctx.shadowOffsetY = 1;
+                    
+                    ctx.fillText(text, x, y);
                     
                     ctx.restore();
                 });
