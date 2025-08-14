@@ -138,6 +138,13 @@
             border-left-color: #dc322f; /* Solarized red */
         }
 
+        .player-card.winner {
+            background: rgba(181, 137, 0, 0.2); /* Solarized yellow */
+            border-left-width: 6px;
+            transform: translateX(2px);
+            box-shadow: 0 2px 8px rgba(181, 137, 0, 0.3);
+        }
+
         .player-name {
             font-weight: 500;
             font-size: 14px;
@@ -197,22 +204,6 @@
             font-weight: 500;
         }
 
-        .connection-status {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            background: rgba(238, 232, 213, 0.9); /* Solarized light base2 */
-            backdrop-filter: blur(10px);
-            padding: 10px 15px;
-            border-radius: 20px;
-            font-size: 12px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            z-index: 100;
-            color: #657b83; /* Solarized light base00 */
-            border: 1px solid rgba(147, 161, 161, 0.3); /* Solarized light base1 */
-        }
 
         .game-over-overlay {
             position: absolute;
@@ -301,10 +292,6 @@
             
             <div class="canvas-container">
                 <canvas id="gameCanvas"></canvas>
-                <div class="connection-status" id="connectionStatusDetail">
-                    <span class="status-indicator" id="detailStatusIndicator"></span>
-                    <span id="detailStatusText">Connecting to game server...</span>
-                </div>
             </div>
             
             <div class="game-over-overlay" id="gameOverOverlay">
@@ -347,6 +334,7 @@
                     '#6c71c4', '#2aa198', '#cb4b16', '#d33682'
                 ];
                 this.colorIndex = 0;
+                this.previousPlayers = new Map(); // Track previous player states
                 
                 // Animation system
                 this.isAnimating = false;
@@ -391,21 +379,18 @@
                 const stateChangeEnd = 0.30;
                 const generationEnd = 0.50;
                 
-                console.log('Animation progress: ' + (progress * 100).toFixed(1) + '%, phase: ' + this.currentPhase);
                 
                 if (progress <= movementEnd) {
                     this.currentPhase = 'movement';
                     this.updateMovementAnimation(progress / movementEnd);
                 } else if (progress <= stateChangeEnd) {
                     if (this.currentPhase === 'movement') {
-                        console.log('Finishing movement phase');
                         this.finishMovementPhase();
                         this.currentPhase = 'state_change';
                     }
                     this.updateStateChangeAnimation((progress - movementEnd) / (stateChangeEnd - movementEnd));
                 } else if (progress <= generationEnd) {
                     if (this.currentPhase === 'state_change') {
-                        console.log('Finishing state change phase');
                         this.finishStateChangePhase();
                         this.currentPhase = 'generation';
                         this.startGenerationAnimations();
@@ -413,14 +398,12 @@
                     this.updateGenerationAnimation((progress - stateChangeEnd) / (generationEnd - stateChangeEnd));
                 } else {
                     // Animation complete
-                    console.log('Animation complete');
                     this.finishGenerationPhase();
                     this.finishAnimation();
                 }
             }
 
             updateMovementAnimation(progress) {
-                console.log('Movement animation progress: ' + (progress * 100).toFixed(1) + '%');
                 
                 // Update positions of moving units
                 this.movingUnits.forEach(unit => {
@@ -591,7 +574,6 @@
                     });
                 }
                 
-                this.addLogEntry('Turn animation completed', 'turn-data');
             }
 
             easeInOutCubic(t) {
@@ -652,7 +634,7 @@
                     
                     this.socket.onopen = () => {
                         this.updateConnectionStatus('connected', 'Connected to game server');
-                        this.addLogEntry('Connected to game server', 'game-event');
+                        this.addLogEntry('Successfully connected as viewer', 'game-event');
                         
                         // Join as viewer
                         this.socket.send(JSON.stringify({
@@ -671,7 +653,7 @@
                     
                     this.socket.onclose = () => {
                         this.updateConnectionStatus('disconnected', 'Disconnected from server');
-                        this.addLogEntry('Connection lost. Attempting to reconnect...', 'system');
+                        this.addLogEntry('Connection lost. Reconnecting in 3 seconds...', 'system');
                         
                         // Attempt reconnection after 3 seconds
                         setTimeout(() => {
@@ -703,7 +685,10 @@
                         this.handleTurnProcessed(data);
                         break;
                     case 'game_over':
-                        this.showGameResult(data.winner, data.final_rankings);
+                        this.showGameResult(data.final_rankings);
+                        break;
+                    case 'game_reset':
+                        this.handleGameReset();
                         break;
                     case 'error':
                         this.addLogEntry(`Server error: ${data.message}`, 'system');
@@ -713,20 +698,62 @@
                 }
             }
 
+            handleGameReset() {
+                console.log('Game reset received');
+                
+                // Stop any ongoing animations
+                this.isAnimating = false;
+                this.animationData = null;
+                this.currentPhase = 'idle';
+                this.movingUnits = [];
+                this.unitGenerationAnimations = [];
+                
+                // Clear game state
+                this.gameState = null;
+                this.displayedVertices.clear();
+                this.targetVertices.clear();
+                
+                // Reset player colors (will be reassigned when new players join)
+                this.playerColors = {};
+                this.colorIndex = 0;
+                this.previousPlayers.clear();
+                
+                // Reset UI elements
+                document.getElementById('currentTurn').textContent = '-';
+                document.getElementById('gameStatus').textContent = 'Waiting';
+                
+                // Clear player list
+                const playerList = document.getElementById('playerList');
+                playerList.innerHTML = '';
+                
+                // Hide game over overlay if it was showing
+                const overlay = document.getElementById('gameOverOverlay');
+                overlay.style.display = 'none';
+                
+                // Clear canvas
+                const ctx = this.ctx;
+                const rect = this.canvas.getBoundingClientRect();
+                ctx.clearRect(0, 0, rect.width, rect.height);
+                
+                // Add log entry
+                this.addLogEntry('Game has been reset', 'game-event');
+            }
+
             handleTurnProcessed(turnData) {
                 console.log('Turn processed received:', turnData);
+                
+                // Log player actions for this turn
+                this.logPlayerActions(turnData);
                 
                 // Don't start new animation if one is already running
                 if (this.isAnimating) {
                     console.log('Skipping animation - previous turn still animating');
-                    this.addLogEntry('Skipping animation - previous turn still animating', 'turn-data');
                     return;
                 }
                 
                 // Ensure we have current game state
                 if (!this.gameState || !this.gameState.graph) {
                     console.log('No game state available for animation');
-                    this.addLogEntry('No game state available for animation', 'turn-data');
                     return;
                 }
                 
@@ -741,7 +768,6 @@
                 
                 if (moveCount === 0 && genCount === 0) {
                     console.log('No animations to perform');
-                    this.addLogEntry('No animations to perform this turn', 'turn-data');
                     return;
                 }
                 
@@ -767,8 +793,6 @@
                 
                 console.log('Moving units set up:', this.movingUnits.length);
                 
-                // Log turn processing information
-                this.addLogEntry('Turn ' + turnData.turn + ' animating: ' + moveCount + ' moves, ' + genCount + ' generations', 'turn-data');
                 
                 // Start the animation
                 this.isAnimating = true;
@@ -776,6 +800,56 @@
                 this.currentPhase = 'movement';
                 
                 console.log('Animation started at:', this.animationStartTime);
+            }
+
+            logPlayerActions(turnData) {
+                if (!turnData || !this.gameState) return;
+                
+                // Log turn header
+                this.addLogEntry(`--- Turn ${turnData.turn} ---`, 'turn-data');
+                
+                // Log player moves
+                if (turnData.move_animations && turnData.move_animations.length > 0) {
+                    turnData.move_animations.forEach(move => {
+                        const fromVertex = this.gameState.graph.vertices.find(v => v.id === move.from_vertex);
+                        const toVertex = this.gameState.graph.vertices.find(v => v.id === move.to_vertex);
+                        const fromPos = fromVertex ? `(${fromVertex.position[0]}, ${fromVertex.position[1]})` : move.from_vertex;
+                        const toPos = toVertex ? `(${toVertex.position[0]}, ${toVertex.position[1]})` : move.to_vertex;
+                        
+                        this.addLogEntry(`${move.player_id}: moved ${move.units} units from ${fromPos} to ${toPos} (cost: ${move.cost})`, 'game-event');
+                    });
+                }
+                
+                // Log unit generation
+                if (turnData.unit_generation && turnData.unit_generation.length > 0) {
+                    const generationByPlayer = {};
+                    turnData.unit_generation.forEach(gen => {
+                        const vertex = this.gameState.graph.vertices.find(v => v.id === gen.vertex_id);
+                        if (vertex && vertex.controller) {
+                            if (!generationByPlayer[vertex.controller]) {
+                                generationByPlayer[vertex.controller] = 0;
+                            }
+                            generationByPlayer[vertex.controller] += vertex.weight || 1;
+                        }
+                    });
+                    
+                    Object.entries(generationByPlayer).forEach(([playerId, totalGenerated]) => {
+                        this.addLogEntry(`${playerId}: generated +${totalGenerated} units`, 'game-event');
+                    });
+                }
+                
+                // Log active players and their status
+                if (this.gameState.players && this.gameState.players.length > 0) {
+                    const activePlayers = this.gameState.players.filter(p => p.status === 'active');
+                    if (activePlayers.length > 0) {
+                        const playerStatus = activePlayers
+                            .map(p => `${p.id}(${p.total_units})`)
+                            .join(', ');
+                        this.addLogEntry(`Active players: ${playerStatus}`, 'game-event');
+                    }
+                    
+                    // Note: Individual player eliminations are handled in logPlayerStatusChanges
+                }
             }
 
             setupMovingUnits(moveAnimations) {
@@ -834,19 +908,16 @@
             }
 
             updateConnectionStatus(status, message) {
-                const indicators = document.querySelectorAll('.status-indicator');
-                const statusTexts = [
-                    document.getElementById('connectionText'),
-                    document.getElementById('detailStatusText')
-                ];
+                const indicator = document.getElementById('connectionStatus');
+                const statusText = document.getElementById('connectionText');
                 
-                indicators.forEach(indicator => {
+                if (indicator) {
                     indicator.className = `status-indicator ${status}`;
-                });
+                }
                 
-                statusTexts.forEach(text => {
-                    if (text) text.textContent = message;
-                });
+                if (statusText) {
+                    statusText.textContent = message;
+                }
             }
 
             updateGameState(gameState) {
@@ -866,6 +937,11 @@
                 // If this is the first state or no animation is running, render immediately
                 if (wasFirstState || !this.isAnimating) {
                     console.log('Updating displayed vertices immediately (no animation running)');
+                    
+                    // Log game start if this is the first state
+                    if (wasFirstState && gameState.game_status === 'active') {
+                        this.addLogEntry('🎮 Game started! Players are making their moves.', 'game-event');
+                    }
                     // Initialize displayed vertices from game state
                     if (gameState.graph) {
                         this.displayedVertices.clear();
@@ -943,8 +1019,8 @@
                 const offsetY = (height - graphHeight * scale) / 2 - minY * scale;
                 
                 // Draw edges first
-                ctx.strokeStyle = 'rgba(101, 123, 131, 0.4)'; /* Solarized light base00 */
-                ctx.lineWidth = 2;
+                ctx.strokeStyle = 'rgba(147, 161, 161, 0.6)'; /* Same as neutral vertex color */
+                ctx.lineWidth = 3;
                 ctx.beginPath();
                 
                 this.gameState.graph.edges.forEach(edge => {
@@ -988,25 +1064,22 @@
                 const radius = 25;
                 
                 // Determine vertex color
-                let fillColor = 'rgba(147, 161, 161, 0.6)'; // Solarized light base1 for neutral
+                let fillColor = 'rgba(147, 161, 161, 1.0)'; // Fully opaque neutral vertex color
                 
                 if (vertex.controllerTransition !== undefined) {
                     // Animate color transition
-                    const oldColor = vertex.controller ? this.playerColors[vertex.controller] : 'rgba(147, 161, 161, 0.6)';
-                    const newColor = vertex.newController ? this.playerColors[vertex.newController] : 'rgba(147, 161, 161, 0.6)';
+                    const oldColor = vertex.controller ? this.playerColors[vertex.controller] : 'rgba(147, 161, 161, 1.0)';
+                    const newColor = vertex.newController ? this.playerColors[vertex.newController] : 'rgba(147, 161, 161, 1.0)';
                     fillColor = this.interpolateColor(oldColor, newColor, vertex.controllerTransition);
                 } else if (vertex.controller) {
                     fillColor = this.playerColors[vertex.controller] || '#93a1a1';
                 }
                 
-                // Draw vertex circle
+                // Draw vertex circle (no stroke)
                 ctx.beginPath();
                 ctx.arc(x, y, radius, 0, 2 * Math.PI);
                 ctx.fillStyle = fillColor;
                 ctx.fill();
-                ctx.strokeStyle = 'rgba(88, 110, 117, 0.8)'; /* Solarized light base01 */
-                ctx.lineWidth = 2;
-                ctx.stroke();
                 
                 // Draw unit count
                 ctx.fillStyle = '#fdf6e3'; /* Solarized light base3 for high contrast */
@@ -1030,9 +1103,6 @@
                     ctx.arc(unit.currentX, unit.currentY, 8, 0, 2 * Math.PI);
                     ctx.fillStyle = color;
                     ctx.fill();
-                    ctx.strokeStyle = 'rgba(88, 110, 117, 0.8)'; /* Solarized light base01 */
-                    ctx.lineWidth = 1;
-                    ctx.stroke();
                     
                     // Draw unit count
                     ctx.fillStyle = '#fdf6e3'; /* Solarized light base3 */
@@ -1109,11 +1179,62 @@
                 return t < 0.5 ? color1 : color2;
             }
 
-            updatePlayers(players) {
-                const playerList = document.getElementById('playerList');
-                playerList.innerHTML = '';
+            logPlayerStatusChanges(players) {
+                if (!players) return;
                 
                 players.forEach(player => {
+                    const prevPlayer = this.previousPlayers.get(player.id);
+                    
+                    if (!prevPlayer) {
+                        // New player joined
+                        this.addLogEntry(`${player.id} joined the game (${player.total_units} units)`, 'game-event');
+                    } else {
+                        // Check for status changes
+                        if (prevPlayer.status === 'active' && player.status === 'eliminated') {
+                            this.addLogEntry(`${player.id} has been eliminated!`, 'elimination');
+                        }
+                        
+                        // Check for significant unit count changes (threshold of 5+ units)
+                        const unitDiff = player.total_units - prevPlayer.total_units;
+                        if (Math.abs(unitDiff) >= 5) {
+                            if (unitDiff > 0) {
+                                this.addLogEntry(`${player.id} gained ${unitDiff} units (now ${player.total_units})`, 'game-event');
+                            } else {
+                                this.addLogEntry(`${player.id} lost ${Math.abs(unitDiff)} units (now ${player.total_units})`, 'game-event');
+                            }
+                        }
+                    }
+                    
+                    // Update stored player state
+                    this.previousPlayers.set(player.id, {
+                        id: player.id,
+                        status: player.status,
+                        total_units: player.total_units
+                    });
+                });
+            }
+
+            updatePlayers(players) {
+                const playerList = document.getElementById('playerList');
+                
+                // Check for player status changes before updating UI
+                this.logPlayerStatusChanges(players);
+                
+                playerList.innerHTML = '';
+                
+                // Order players: active (by units desc), then eliminated (by elimination order)
+                const sortedPlayers = [...players].sort((a, b) => {
+                    // Active players first, sorted by unit count descending
+                    if (a.status === 'active' && b.status !== 'active') return -1;
+                    if (b.status === 'active' && a.status !== 'active') return 1;
+                    if (a.status === 'active' && b.status === 'active') {
+                        return b.total_units - a.total_units;
+                    }
+                    // For eliminated players, maintain original order
+                    return 0;
+                });
+                
+                sortedPlayers.forEach((player, index) => {
                     // Assign color if not already assigned
                     if (!this.playerColors[player.id]) {
                         this.playerColors[player.id] = this.colorPalette[this.colorIndex % this.colorPalette.length];
@@ -1121,12 +1242,30 @@
                     }
                     
                     const playerCard = document.createElement('div');
-                    playerCard.className = `player-card ${player.status}`;
+                    let cardClass = `player-card ${player.status}`;
+                    
+                    // Add winner styling for first active player if game is ended
+                    if (this.gameState && this.gameState.game_status === 'ended' && 
+                        player.status === 'active' && index === 0) {
+                        cardClass += ' winner';
+                    }
+                    
+                    playerCard.className = cardClass;
                     playerCard.style.borderLeftColor = this.playerColors[player.id];
+                    
+                    // Add rank indicator for game end
+                    let rankText = '';
+                    if (this.gameState && this.gameState.game_status === 'ended') {
+                        if (player.status === 'active' && index === 0) {
+                            rankText = '🏆 Winner: ';
+                        } else {
+                            rankText = `#${index + 1}: `;
+                        }
+                    }
                     
                     playerCard.innerHTML = `
                         <div class="player-name" style="color: ${this.playerColors[player.id]}">
-                            ${player.id}
+                            ${rankText}${player.id}
                         </div>
                         <div class="player-stats">
                             <span>Units: ${player.total_units}</span>
@@ -1150,44 +1289,14 @@
                 this.renderVertex(vertex, scale, offsetX, offsetY);
             }
 
-            showGameResult(winners, rankings) {
-                const overlay = document.getElementById('gameOverOverlay');
-                const winnerList = document.getElementById('winnerList');
-                const rankingsDiv = document.getElementById('finalRankings');
+            showGameResult(rankings) {
+                // Don't show the overlay - winners will be shown in the ordered players list
+                this.addLogEntry('🏆 Game completed! Final rankings displayed in players list.', 'game-event');
                 
-                // Show winners
-                if (winners && winners.length > 0) {
-                    if (winners.length === 1) {
-                        winnerList.textContent = `Winner: ${winners[0]}`;
-                    } else {
-                        winnerList.textContent = `Winners: ${winners.join(', ')}`;
-                    }
-                } else {
-                    winnerList.textContent = 'Game ended with no winner';
+                // Update the players list to reflect final standings
+                if (this.gameState) {
+                    this.updatePlayers(this.gameState.players);
                 }
-                
-                // Show full rankings
-                if (rankings && rankings.length > 0) {
-                    rankingsDiv.innerHTML = '<h4>Final Rankings:</h4>';
-                    rankings.forEach((tier, index) => {
-                        const rankItem = document.createElement('div');
-                        rankItem.className = 'ranking-item';
-                        
-                        const place = index + 1;
-                        const placeSuffix = place === 1 ? 'st' : place === 2 ? 'nd' : place === 3 ? 'rd' : 'th';
-                        
-                        if (tier.length === 1) {
-                            rankItem.textContent = `${place}${placeSuffix}: ${tier[0]}`;
-                        } else {
-                            rankItem.textContent = `${place}${placeSuffix} (tie): ${tier.join(', ')}`;
-                        }
-                        
-                        rankingsDiv.appendChild(rankItem);
-                    });
-                }
-                
-                overlay.style.display = 'flex';
-                this.addLogEntry('Game completed!', 'game-event');
             }
 
             addLogEntry(message, type = '') {
