@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import websockets
+import sys
 from typing import Dict, Set, Optional, Any
 from websockets.server import WebSocketServerProtocol
 from game_core import GameState, GameEngine, Command, PlayerStatus
@@ -60,6 +61,92 @@ class GameServer:
         self.turn_timeout_seconds = 30
         self.turn_duration_seconds = 1.0  # Duration of each turn for consistent viewing
         self.turn_timer_task: Optional[asyncio.Task] = None
+        
+        # Server control
+        self.shutdown_requested = False
+    
+    def reset_game(self) -> None:
+        """
+        Reset the game state to allow for a new game.
+        """
+        try:
+            logger.info("Resetting game state...")
+            
+            # Cancel any running tasks
+            if self.grace_period_task and not self.grace_period_task.done():
+                self.grace_period_task.cancel()
+            if self.turn_timer_task and not self.turn_timer_task.done():
+                self.turn_timer_task.cancel()
+            
+            # Clear game state
+            self.game_started = False
+            self.game_engine = None
+            self.turn_commands.clear()
+            self.grace_period_task = None
+            self.turn_timer_task = None
+            
+            # Reset game state with fresh grid
+            self.game_state = GameState(max_turns=self.max_turns)
+            self.game_state.graph.generate_grid_graph(self.grid_width, self.grid_height)
+            
+            # Keep connections but clear their game associations
+            # (Players will need to rejoin)
+            self.connection_to_player.clear()
+            
+            # Notify all clients about the reset
+            asyncio.create_task(self.broadcast_to_bots({
+                "type": "game_reset",
+                "message": "Game has been reset. Please rejoin to participate in the next game."
+            }))
+            
+            asyncio.create_task(self.broadcast_to_viewers({
+                "type": "game_reset",
+                "message": "Game has been reset."
+            }))
+            
+            logger.info(f"Game reset complete. Grid regenerated with {len(self.game_state.graph.vertices)} vertices")
+            logger.info(f"Waiting for players to reconnect...")
+            
+        except Exception as e:
+            logger.error(f"Error resetting game: {e}")
+    
+    def force_start_game(self) -> bool:
+        """
+        Force start the game if there's at least one connected player.
+        
+        Returns:
+            True if game was started, False otherwise
+        """
+        try:
+            if self.game_started:
+                logger.warning("Game is already running")
+                return False
+            
+            if len(self.bot_connections) == 0:
+                logger.warning("Cannot start game - no players connected")
+                return False
+            
+            logger.info(f"Force starting game with {len(self.bot_connections)} players")
+            
+            # Cancel grace period if running
+            if self.grace_period_task and not self.grace_period_task.done():
+                self.grace_period_task.cancel()
+            
+            # Override minimum players requirement temporarily
+            original_minimum = self.minimum_players
+            self.minimum_players = 1
+            
+            # Start the game
+            asyncio.create_task(self.start_game())
+            
+            # Restore original minimum
+            self.minimum_players = original_minimum
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error force starting game: {e}")
+            return False
     
     async def add_bot_connection(self, websocket: WebSocketServerProtocol, player_id: str) -> bool:
         """
@@ -476,7 +563,7 @@ class GameServer:
             if self.game_started:
                 return
             
-            if len(self.bot_connections) < self.minimum_players:
+            if len(self.bot_connections) < self.minimum_players and self.minimum_players > 1:
                 logger.warning(f"Cannot start game - insufficient players ({len(self.bot_connections)}/{self.minimum_players})")
                 return
             
@@ -507,7 +594,7 @@ class GameServer:
         Main turn timer loop that processes turns at regular intervals.
         """
         try:
-            while not self.game_state.status.value == "ended":
+            while not self.game_state.status.value == "ended" and not self.shutdown_requested:
                 # Wait for the turn duration
                 await asyncio.sleep(self.turn_duration_seconds)
                 
@@ -682,11 +769,107 @@ class GameServer:
             await self.remove_connection(websocket)
 
 
+async def keyboard_input_handler(server: GameServer) -> None:
+    """
+    Handle keyboard input for server commands.
+    
+    Args:
+        server: The game server instance
+    """
+    logger.info("Keyboard command handler started. Available commands:")
+    logger.info("  'quit' - Stop the server")
+    logger.info("  'start' - Force start game (requires at least 1 player)")
+    logger.info("  'reset' - Reset game state and wait for new players")
+    logger.info("  'status' - Show current server status")
+    logger.info("  'help' - Show this help message")
+    
+    loop = asyncio.get_event_loop()
+    
+    try:
+        while not server.shutdown_requested:
+            try:
+                # Read keyboard input in a non-blocking way
+                command = await loop.run_in_executor(None, input, "Server> ")
+                command = command.strip().lower()
+                
+                if command == "quit" or command == "exit":
+                    logger.info("Shutdown requested by user")
+                    server.shutdown_requested = True
+                    break
+                    
+                elif command == "start":
+                    if server.game_started:
+                        logger.warning("Game is already running")
+                    elif len(server.bot_connections) == 0:
+                        logger.warning("Cannot start game - no players connected")
+                    else:
+                        logger.info(f"Force starting game with {len(server.bot_connections)} players")
+                        success = server.force_start_game()
+                        if success:
+                            logger.info("Game force-started successfully")
+                        else:
+                            logger.warning("Failed to force start game")
+                            
+                elif command == "reset":
+                    if server.game_started:
+                        logger.info("Resetting active game...")
+                    else:
+                        logger.info("Resetting server state...")
+                    server.reset_game()
+                    logger.info("Game reset complete")
+                    
+                elif command == "status":
+                    game_status = "Active" if server.game_started else "Waiting"
+                    turn = server.game_state.current_turn if server.game_state else 0
+                    logger.info(f"=== Server Status ===")
+                    logger.info(f"Game Status: {game_status}")
+                    logger.info(f"Current Turn: {turn}")
+                    logger.info(f"Connected Bots: {len(server.bot_connections)}")
+                    logger.info(f"Connected Viewers: {len(server.viewer_connections)}")
+                    logger.info(f"Grid Size: {server.grid_width}x{server.grid_height}")
+                    logger.info(f"Turn Duration: {server.turn_duration_seconds}s")
+                    if server.bot_connections:
+                        logger.info(f"Bot Players: {list(server.bot_connections.keys())}")
+                    
+                elif command == "help":
+                    logger.info("=== Available Commands ===")
+                    logger.info("  'quit' or 'exit' - Stop the server")
+                    logger.info("  'start' - Force start game (requires at least 1 player)")
+                    logger.info("  'reset' - Reset game state and wait for new players")
+                    logger.info("  'status' - Show current server status")
+                    logger.info("  'help' - Show this help message")
+                    
+                elif command == "":
+                    # Empty command, just continue
+                    continue
+                    
+                else:
+                    logger.warning(f"Unknown command: '{command}'. Type 'help' for available commands.")
+                    
+            except EOFError:
+                # Handle Ctrl+D
+                logger.info("EOF received, shutting down server")
+                server.shutdown_requested = True
+                break
+            except KeyboardInterrupt:
+                # Handle Ctrl+C
+                logger.info("Keyboard interrupt received, shutting down server")
+                server.shutdown_requested = True
+                break
+            except Exception as e:
+                logger.error(f"Error processing keyboard input: {e}")
+                
+    except Exception as e:
+        logger.error(f"Error in keyboard handler: {e}")
+    finally:
+        logger.info("Keyboard command handler shutting down")
+
+
 async def run_server(host: str = "localhost", port: int = 8765, 
                     grid_width: int = 5, grid_height: int = 5, 
                     turn_duration: float = 1.0) -> None:
     """
-    Run the game server.
+    Run the game server with keyboard command support.
     
     Args:
         host: Host address to bind to
@@ -703,9 +886,51 @@ async def run_server(host: str = "localhost", port: int = 8765,
     logger.info(f"Turn duration: {turn_duration}s")
     logger.info(f"Grid generated with {len(server.game_state.graph.vertices)} vertices")
     logger.info(f"Waiting for at least {server.minimum_players} bot connections...")
+    logger.info("")
+    logger.info("Server is ready for connections and keyboard commands.")
     
-    async with websockets.serve(server.handle_client, host, port):
-        await asyncio.Future()  # Run forever
+    # Start the WebSocket server
+    websocket_server = await websockets.serve(server.handle_client, host, port)
+    
+    # Start the keyboard input handler
+    keyboard_task = asyncio.create_task(keyboard_input_handler(server))
+    
+    try:
+        # Wait for either the keyboard handler to request shutdown or the server to stop
+        await keyboard_task
+        
+    except KeyboardInterrupt:
+        logger.info("Received keyboard interrupt")
+        server.shutdown_requested = True
+        
+    finally:
+        logger.info("Shutting down server...")
+        
+        # Cancel any running tasks
+        if server.grace_period_task and not server.grace_period_task.done():
+            server.grace_period_task.cancel()
+        if server.turn_timer_task and not server.turn_timer_task.done():
+            server.turn_timer_task.cancel()
+        
+        # Close WebSocket server
+        websocket_server.close()
+        await websocket_server.wait_closed()
+        
+        # Cancel keyboard task if still running
+        if not keyboard_task.done():
+            keyboard_task.cancel()
+        
+        # Notify any remaining clients
+        await server.broadcast_to_bots({
+            "type": "server_shutdown",
+            "message": "Server is shutting down"
+        })
+        await server.broadcast_to_viewers({
+            "type": "server_shutdown", 
+            "message": "Server is shutting down"
+        })
+        
+        logger.info("Server shutdown complete")
 
 
 async def test_early_assignment_and_removal():
