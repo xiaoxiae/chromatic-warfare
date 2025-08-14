@@ -473,18 +473,29 @@
                                     weight: displayVertex.weight || 1,
                                     x: vertexPos.x,
                                     y: vertexPos.y,
-                                    startTime: 0, // Will be set relative to generation phase
-                                    alpha: 1.0,
-                                    offsetY: 0
+                                    startDelay: 0.3, // Start animation 30% into the generation phase
+                                    alpha: 0.0, // Start invisible
+                                    offsetY: 0,
+                                    started: false
                                 });
                             }
+                        }
+                    });
+                }
+                
+                // Store pre-generation unit counts for each vertex that will generate
+                if (this.animationData && this.animationData.unit_generation) {
+                    this.animationData.unit_generation.forEach(genData => {
+                        const displayVertex = this.displayedVertices.get(genData.vertex_id);
+                        if (displayVertex && !displayVertex.hasOwnProperty('preGenerationUnits')) {
+                            displayVertex.preGenerationUnits = displayVertex.units;
                         }
                     });
                 }
             }
 
             updateGenerationAnimation(progress) {
-                // Animate unit count increases
+                // Animate unit count increases from pre-generation values
                 const easedProgress = this.easeInOutCubic(progress);
                 
                 if (this.animationData && this.animationData.unit_generation) {
@@ -492,19 +503,33 @@
                         const displayVertex = this.displayedVertices.get(genData.vertex_id);
                         const targetVertex = this.targetVertices.get(genData.vertex_id);
                         
-                        if (displayVertex && targetVertex) {
-                            const startUnits = displayVertex.baseUnits || displayVertex.units;
-                            const endUnits = targetVertex.units;
-                            displayVertex.units = Math.floor(startUnits + (endUnits - startUnits) * easedProgress);
+                        if (displayVertex && targetVertex && displayVertex.hasOwnProperty('preGenerationUnits')) {
+                            const startUnits = displayVertex.preGenerationUnits;
+                            const generatedUnits = displayVertex.weight || 1;
+                            const endUnits = startUnits + generatedUnits;
+                            
+                            // Animate from pre-generation count to post-generation count
+                            displayVertex.units = Math.floor(startUnits + (generatedUnits * easedProgress));
                         }
                     });
                 }
                 
-                // Update +Weight text animations
+                // Update +Weight text animations with delay
                 this.unitGenerationAnimations.forEach(anim => {
-                    // Float upward and fade out
-                    anim.offsetY = -progress * 40; // Move up 40 pixels
-                    anim.alpha = 1.0 - progress; // Fade out completely
+                    if (progress >= anim.startDelay && !anim.started) {
+                        anim.started = true;
+                        anim.alpha = 1.0;
+                    }
+                    
+                    if (anim.started) {
+                        // Calculate animation progress since it started
+                        const animProgress = (progress - anim.startDelay) / (1.0 - anim.startDelay);
+                        const clampedProgress = Math.max(0, Math.min(1, animProgress));
+                        
+                        // Float upward and fade out
+                        anim.offsetY = -clampedProgress * 40; // Move up 40 pixels
+                        anim.alpha = 1.0 - clampedProgress; // Fade out completely
+                    }
                 });
             }
 
@@ -575,7 +600,8 @@
                     if (targetVertex) {
                         displayVertex.units = targetVertex.units;
                         displayVertex.controller = targetVertex.controller;
-                        displayVertex.baseUnits = undefined;
+                        // Clean up temporary properties
+                        delete displayVertex.preGenerationUnits;
                     }
                 });
                 
@@ -806,19 +832,10 @@
                 // Estimate turn duration (default 1000ms, could be sent from server)
                 this.turnDuration = 1000;
                 
-                // Initialize displayed vertices from current game state
-                this.displayedVertices.clear();
-                this.gameState.graph.vertices.forEach(vertex => {
-                    this.displayedVertices.set(vertex.id, {
-                        id: vertex.id,
-                        controller: vertex.controller,
-                        units: vertex.units,
-                        position: vertex.position,
-                        weight: vertex.weight
-                    });
-                });
+                // Calculate the state BEFORE unit generation (after moves but before generation)
+                this.calculatePreGenerationState();
                 
-                console.log('Displayed vertices initialized:', this.displayedVertices.size);
+                console.log('Pre-generation state calculated');
                 
                 // Set up moving units for animation
                 this.setupMovingUnits((turnData.move_animations && turnData.move_animations.length) ? turnData.move_animations : []);
@@ -832,6 +849,48 @@
                 this.currentPhase = 'movement';
                 
                 console.log('Animation started at:', this.animationStartTime);
+            }
+
+            calculatePreGenerationState() {
+                // Start with current game state (which includes moves + generation)
+                // Then subtract generation to get post-move, pre-generation state
+                this.displayedVertices.clear();
+                this.targetVertices.clear();
+                
+                if (!this.gameState || !this.gameState.graph) return;
+                
+                this.gameState.graph.vertices.forEach(vertex => {
+                    // Store final state (post-generation) as target
+                    this.targetVertices.set(vertex.id, {
+                        id: vertex.id,
+                        controller: vertex.controller,
+                        units: vertex.units,
+                        position: vertex.position,
+                        weight: vertex.weight
+                    });
+                    
+                    // Calculate pre-generation state for display
+                    let preGenerationUnits = vertex.units;
+                    
+                    // Subtract generation if this vertex generated units
+                    if (this.animationData && this.animationData.unit_generation) {
+                        const generationData = this.animationData.unit_generation.find(gen => gen.vertex_id === vertex.id);
+                        if (generationData) {
+                            preGenerationUnits -= (vertex.weight || 1);
+                        }
+                    }
+                    
+                    this.displayedVertices.set(vertex.id, {
+                        id: vertex.id,
+                        controller: vertex.controller,
+                        units: preGenerationUnits,
+                        position: vertex.position,
+                        weight: vertex.weight
+                    });
+                });
+                
+                console.log('Displayed vertices (pre-generation):', this.displayedVertices.size);
+                console.log('Target vertices (post-generation):', this.targetVertices.size);
             }
 
             logPlayerActions(turnData) {
@@ -1151,7 +1210,7 @@
                 const ctx = this.ctx;
                 
                 this.unitGenerationAnimations.forEach(anim => {
-                    if (anim.alpha <= 0) return;
+                    if (anim.alpha <= 0 || !anim.started) return;
                     
                     ctx.save();
                     ctx.globalAlpha = anim.alpha;
