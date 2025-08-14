@@ -26,7 +26,11 @@ class GameInstance:
     Single game instance managing one game with its own state, connections and logic.
     """
     
-    def __init__(self, game_id: str, grid_width: int = 5, grid_height: int = 5, max_turns: int = 10, starting_units: int = 5):
+    def __init__(self, game_id: str, grid_width: int = 5, grid_height: int = 5, 
+                 max_turns: int = 10, starting_units: int = 5, map_type: str = "grid",
+                 vertex_weight_range: Tuple[int, int] = None, 
+                 vertex_remove_probability: float = None,
+                 maze_width: int = None, maze_height: int = None):
         """
         Initialize the game server.
         
@@ -35,12 +39,22 @@ class GameInstance:
             grid_height: Height of the game grid
             max_turns: Maximum number of turns before game ends
             starting_units: Number of units each player starts with
+            map_type: Type of map ("grid" or "hex")
+            vertex_weight_range: Range for vertex weights (min, max)
+            vertex_remove_probability: Probability of removing vertices
+            maze_width: Width for maze generation (if different from grid)
+            maze_height: Height for maze generation (if different from grid)
         """
         self.game_id = game_id
         self.grid_width = grid_width
         self.grid_height = grid_height
         self.max_turns = max_turns
         self.starting_units = starting_units
+        self.map_type = map_type
+        self.vertex_weight_range = vertex_weight_range
+        self.vertex_remove_probability = vertex_remove_probability
+        self.maze_width = maze_width or grid_width
+        self.maze_height = maze_height or grid_height
         
         # Connection management
         self.bot_connections: Dict[str, WebSocketServerProtocol] = {}  # player_id -> websocket
@@ -49,7 +63,17 @@ class GameInstance:
         
         # Game state - initialize immediately with grid
         self.game_state = GameState(max_turns=self.max_turns)
-        self.game_state.graph.generate_grid_graph(self.grid_width, self.grid_height)
+        if map_type == "hex":
+            self.game_state.graph.generate_hex_graph(
+                self.maze_width, self.maze_height, 
+                vertex_weight_range, vertex_remove_probability
+            )
+        else:  # default to grid
+            self.game_state.graph.generate_grid_graph(
+                self.maze_width, self.maze_height,
+                vertex_weight_range, vertex_remove_probability
+            )
+
         self.game_engine: Optional[GameEngine] = None
         self.game_started = False
         
@@ -119,7 +143,16 @@ class GameInstance:
             
             # Reset game state with fresh grid
             self.game_state = GameState(max_turns=self.max_turns)
-            self.game_state.graph.generate_grid_graph(self.grid_width, self.grid_height)
+            if self.map_type == "hex":
+                self.game_state.graph.generate_hex_graph(
+                    self.maze_width, self.maze_height,
+                    self.vertex_weight_range, self.vertex_remove_probability
+                )
+            else:  # default to grid
+                self.game_state.graph.generate_grid_graph(
+                    self.maze_width, self.maze_height,
+                    self.vertex_weight_range, self.vertex_remove_probability
+                )
             
             # Keep connections but clear their game associations
             # (Players will need to rejoin)
@@ -860,7 +893,10 @@ class GameServer:
     
     def create_game(self, game_id: str, grid_width: int = None, grid_height: int = None,
                    max_turns: int = None, starting_units: int = None, 
-                   turn_duration: float = None) -> GameInstance:
+                   turn_duration: float = None, map_type: str = "grid",
+                   vertex_weight_range: Tuple[int, int] = None,
+                   vertex_remove_probability: float = None,
+                   maze_width: int = None, maze_height: int = None) -> GameInstance:
         """Create a new game instance with the given ID."""
         if game_id in self.games:
             raise ValueError(f"Game {game_id} already exists")
@@ -872,7 +908,9 @@ class GameServer:
         units = starting_units if starting_units is not None else self.default_starting_units
         duration = turn_duration if turn_duration is not None else self.default_turn_duration
         
-        game = GameInstance(game_id, width, height, turns, units)
+        game = GameInstance(game_id, width, height, turns, units, map_type, 
+                          vertex_weight_range, vertex_remove_probability,
+                          maze_width, maze_height)
         game.turn_duration_seconds = duration
         self.games[game_id] = game
         
@@ -1021,13 +1059,30 @@ class GameServer:
             max_turns = data.get("max_turns")
             starting_units = data.get("starting_units")
             turn_duration = data.get("turn_duration")
+            map_type = data.get("map_type", "grid")
             
-            game = self.create_game(game_id, grid_width, grid_height, max_turns, starting_units, turn_duration)
+            # Parse vertex weight range
+            vertex_weight_range = None
+            if "vertex_weight_range" in data:
+                weight_range = data["vertex_weight_range"]
+                if isinstance(weight_range, list) and len(weight_range) == 2:
+                    vertex_weight_range = tuple(weight_range)
+            
+            vertex_remove_probability = data.get("vertex_remove_probability")
+            maze_width = data.get("maze_width")
+            maze_height = data.get("maze_height")
+            
+            game = self.create_game(game_id, grid_width, grid_height, max_turns, 
+                                  starting_units, turn_duration, map_type,
+                                  vertex_weight_range, vertex_remove_probability,
+                                  maze_width, maze_height)
             
             await self.send_message(websocket, {
                 "type": "game_created",
                 "game_id": game_id,
-                "message": f"Game {game_id} created successfully"
+                "map_type": map_type,
+                "vertices": len(game.game_state.graph.vertices),
+                "message": f"Game {game_id} created successfully with {map_type} map"
             })
             
         except ValueError as e:
@@ -1321,6 +1376,108 @@ async def keyboard_input_handler(server: GameServer) -> None:
                             status = "Active" if game.game_started else "Waiting"
                             turn = game.game_state.current_turn if game.game_state else 0
                             logger.info(f"  {game_id}: {status}, Turn {turn}/{game.max_turns}, Duration: {game.turn_duration_seconds}s")
+
+                elif command.startswith("map "):
+                    try:
+                        parts = command.split()
+                        if len(parts) < 3:
+                            logger.warning("Usage: map <game_id> <type> [options]")
+                            logger.warning("  Types: grid, hex")
+                            logger.warning("  Options: weight_min=N weight_max=N remove_prob=0.1 maze_width=N maze_height=N")
+                        else:
+                            game_id = parts[1]
+                            map_type = parts[2]
+                            
+                            if map_type not in ["grid", "hex"]:
+                                logger.warning("Map type must be 'grid' or 'hex'")
+                                continue
+                            
+                            game = server.get_game(game_id)
+                            if not game:
+                                logger.warning(f"Game {game_id} does not exist")
+                                continue
+                            
+                            if game.game_started:
+                                logger.warning(f"Cannot change map for game {game_id} - game has already started")
+                                continue
+                            
+                            # Parse options
+                            vertex_weight_range = game.vertex_weight_range
+                            vertex_remove_probability = game.vertex_remove_probability
+                            maze_width = game.maze_width
+                            maze_height = game.maze_height
+                            
+                            for part in parts[3:]:
+                                if "=" in part:
+                                    key, value = part.split("=", 1)
+                                    if key == "weight_min":
+                                        min_val = int(value)
+                                        if vertex_weight_range:
+                                            vertex_weight_range = (min_val, vertex_weight_range[1])
+                                        else:
+                                            vertex_weight_range = (min_val, min_val + 5)
+                                    elif key == "weight_max":
+                                        max_val = int(value)
+                                        if vertex_weight_range:
+                                            vertex_weight_range = (vertex_weight_range[0], max_val)
+                                        else:
+                                            vertex_weight_range = (1, max_val)
+                                    elif key == "remove_prob":
+                                        vertex_remove_probability = float(value)
+                                        if not (0.0 <= vertex_remove_probability <= 1.0):
+                                            logger.warning("Remove probability must be between 0.0 and 1.0")
+                                            continue
+                                    elif key == "maze_width":
+                                        maze_width = int(value)
+                                        if maze_width < 1:
+                                            logger.warning("Maze width must be at least 1")
+                                            continue
+                                    elif key == "maze_height":
+                                        maze_height = int(value)
+                                        if maze_height < 1:
+                                            logger.warning("Maze height must be at least 1")
+                                            continue
+                            
+                            # Update game parameters
+                            old_type = game.map_type
+                            game.map_type = map_type
+                            game.vertex_weight_range = vertex_weight_range
+                            game.vertex_remove_probability = vertex_remove_probability
+                            game.maze_width = maze_width
+                            game.maze_height = maze_height
+                            
+                            # Regenerate the map
+                            if map_type == "hex":
+                                game.game_state.graph.generate_hex_graph(
+                                    maze_width, maze_height,
+                                    vertex_weight_range, vertex_remove_probability
+                                )
+                            else:  # grid
+                                game.game_state.graph.generate_grid_graph(
+                                    maze_width, maze_height,
+                                    vertex_weight_range, vertex_remove_probability
+                                )
+                            
+                            logger.info(f"Game {game_id}: Map changed from {old_type} to {map_type}")
+                            logger.info(f"  Maze size: {maze_width}x{maze_height}")
+                            logger.info(f"  Vertices: {len(game.game_state.graph.vertices)}")
+                            if vertex_weight_range:
+                                logger.info(f"  Weight range: {vertex_weight_range}")
+                            if vertex_remove_probability:
+                                logger.info(f"  Remove probability: {vertex_remove_probability}")
+                            
+                            # Clear any existing players since map changed
+                            game.bot_connections.clear()
+                            game.connection_to_player.clear()
+                            game.game_state.players.clear()
+                            
+                            # Broadcast updated game state
+                            await game.broadcast_game_state()
+                            
+                    except ValueError as e:
+                        logger.warning(f"Invalid value: {e}")
+                    except Exception as e:
+                        logger.error(f"Failed to change map: {e}")
                     
                 elif command == "help":
                     logger.info("=== Available Commands ===")
@@ -1331,6 +1488,9 @@ async def keyboard_input_handler(server: GameServer) -> None:
                     logger.info("  'reset <game_id>' - Reset a specific game")
                     logger.info("  'set turns <game_id> <max_turns>' - Set maximum turns for a game (before start)")
                     logger.info("  'set duration <game_id> <seconds>' - Set turn duration for a game")
+                    logger.info("  'map <game_id> <type> [options]' - Change map type and parameters (before start)")
+                    logger.info("    Types: grid, hex")
+                    logger.info("    Options: weight_min=N weight_max=N remove_prob=0.1 maze_width=N maze_height=N")
                     logger.info("  'status' - Show current server status")
                     logger.info("  'help' - Show this help message")
                     

@@ -5,6 +5,7 @@ This module contains the foundational data structures for a turn-based strategy 
 played on a directed planar graph.
 """
 
+import math
 from typing import Dict, List, Optional, Set, Tuple, Union
 from dataclasses import dataclass
 from enum import Enum
@@ -226,20 +227,36 @@ class Graph:
         return [vertex for vertex in self.vertices.values() 
                 if vertex.controller is None]
     
-    def generate_grid_graph(self, width: int, height: int, base_weight: int = 1) -> None:
+    def generate_grid_graph(self, width: int, height: int, vertex_weight_range: Optional[Tuple[int, int]] = None, vertex_remove_probability: Optional[float] = None) -> None:
         """
         Generate a grid graph with bidirectional connections between adjacent cells.
         
         Args:
             width: Width of the grid
             height: Height of the grid
-            base_weight: Weight to assign to all vertices
+            vertex_weight_range: Optional tuple of (min_weight, max_weight) to sample vertex weights from.
+                               If None, all vertices will have weight 1.
+            vertex_remove_probability: Optional float between 0 and 1 representing the probability
+                                     of attempting to remove each vertex. Vertices are only removed
+                                     if the graph remains connected after removal.
             
         Raises:
-            ValueError: If dimensions are not positive
+            ValueError: If dimensions are not positive, weight range is invalid, or 
+                       remove probability is not between 0 and 1
         """
         if width <= 0 or height <= 0:
             raise ValueError("Grid dimensions must be positive")
+        
+        if vertex_weight_range is not None:
+            min_weight, max_weight = vertex_weight_range
+            if min_weight > max_weight:
+                raise ValueError("Minimum weight cannot be greater than maximum weight")
+            if min_weight < 1:
+                raise ValueError("Vertex weights must be positive integers")
+        
+        if vertex_remove_probability is not None:
+            if not 0 <= vertex_remove_probability <= 1:
+                raise ValueError("Vertex remove probability must be between 0 and 1")
         
         # Clear existing graph
         self.vertices.clear()
@@ -251,7 +268,15 @@ class Graph:
             for x in range(width):
                 vertex_id = y * width + x
                 position = (float(x), float(y))
-                vertex = Vertex(vertex_id, base_weight, position)
+                
+                # Determine vertex weight
+                if vertex_weight_range is not None:
+                    min_weight, max_weight = vertex_weight_range
+                    weight = random.randint(min_weight, max_weight)
+                else:
+                    weight = 1
+                
+                vertex = Vertex(vertex_id, weight, position)
                 self.add_vertex(vertex)
         
         # Create edges (bidirectional connections between adjacent cells)
@@ -270,6 +295,222 @@ class Graph:
                     bottom_id = (y + 1) * width + x
                     self.add_edge(current_id, bottom_id)
                     self.add_edge(bottom_id, current_id)
+        
+        # Remove vertices randomly while maintaining connectivity
+        if vertex_remove_probability is not None:
+            self._remove_vertices_randomly(vertex_remove_probability)
+    
+    def _remove_vertices_randomly(self, remove_probability: float) -> None:
+        """
+        Remove vertices randomly while maintaining graph connectivity.
+        
+        Args:
+            remove_probability: Probability of attempting to remove each vertex
+        """
+        # Get all vertex IDs and shuffle them for random removal order
+        vertex_ids = list(self.vertices.keys())
+        random.shuffle(vertex_ids)
+        
+        for vertex_id in vertex_ids:
+            # Skip if vertex was already removed
+            if vertex_id not in self.vertices:
+                continue
+                
+            # Check if we should attempt to remove this vertex
+            if random.random() < remove_probability:
+                # Check if removing this vertex would disconnect the graph
+                if self._can_remove_vertex_safely(vertex_id):
+                    self.remove_vertex(vertex_id)
+    
+    def _can_remove_vertex_safely(self, vertex_id: int) -> bool:
+        """
+        Check if removing a vertex would keep the graph connected.
+        
+        Args:
+            vertex_id: ID of vertex to check for removal
+            
+        Returns:
+            True if the vertex can be removed without disconnecting the graph
+        """
+        # If this is the only vertex, we can't remove it
+        if len(self.vertices) <= 1:
+            return False
+        
+        # Get neighbors of the vertex to be removed
+        neighbors = self.get_adjacent_vertices(vertex_id)
+        
+        # If the vertex has no neighbors, it's safe to remove (isolated vertex)
+        if not neighbors:
+            return True
+        
+        # Temporarily remove the vertex and check if remaining graph is connected
+        # Store the vertex and its edges for restoration
+        vertex = self.vertices[vertex_id]
+        edges_to_restore = []
+        
+        # Find all edges involving this vertex
+        for edge in list(self.edges):
+            if edge.from_vertex == vertex_id or edge.to_vertex == vertex_id:
+                edges_to_restore.append(edge)
+        
+        # Temporarily remove the vertex
+        self.remove_vertex(vertex_id)
+        
+        # Check if remaining graph is connected
+        is_connected = self._is_graph_connected()
+        
+        # Restore the vertex and its edges
+        self.add_vertex(vertex)
+        for edge in edges_to_restore:
+            self.add_edge(edge.from_vertex, edge.to_vertex)
+        
+        return is_connected
+    
+    def _is_graph_connected(self) -> bool:
+        """
+        Check if the graph is connected using BFS.
+        
+        Returns:
+            True if the graph is connected, False otherwise
+        """
+        if not self.vertices:
+            return True  # Empty graph is considered connected
+        
+        # Start BFS from any vertex
+        start_vertex = next(iter(self.vertices.keys()))
+        visited = set()
+        queue = [start_vertex]
+        visited.add(start_vertex)
+        
+        while queue:
+            current = queue.pop(0)
+            for neighbor in self._adjacency[current]:
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append(neighbor)
+        
+        # Graph is connected if all vertices were visited
+        return len(visited) == len(self.vertices)
+
+    def generate_hex_graph(self, width: int, height: int, vertex_weight_range: Optional[Tuple[int, int]] = None, vertex_remove_probability: Optional[float] = None) -> None:
+        """
+        Generate a hexagonal grid graph where each vertex connects to 6 neighbors.
+        
+        Args:
+            width: Width of the hexagonal grid (number of columns)
+            height: Height of the hexagonal grid (number of rows)
+            vertex_weight_range: Optional tuple of (min_weight, max_weight) to sample vertex weights from.
+                               If None, all vertices will have weight 1.
+            vertex_remove_probability: Optional float between 0 and 1 representing the probability
+                                     of attempting to remove each vertex. Vertices are only removed
+                                     if the graph remains connected after removal.
+            
+        Raises:
+            ValueError: If dimensions are not positive, weight range is invalid, or 
+                       remove probability is not between 0 and 1
+        """
+        if width <= 0 or height <= 0:
+            raise ValueError("Grid dimensions must be positive")
+        
+        if vertex_weight_range is not None:
+            min_weight, max_weight = vertex_weight_range
+            if min_weight > max_weight:
+                raise ValueError("Minimum weight cannot be greater than maximum weight")
+            if min_weight < 1:
+                raise ValueError("Vertex weights must be positive integers")
+        
+        if vertex_remove_probability is not None:
+            if not 0 <= vertex_remove_probability <= 1:
+                raise ValueError("Vertex remove probability must be between 0 and 1")
+        
+        # Clear existing graph
+        self.vertices.clear()
+        self.edges.clear()
+        self._adjacency.clear()
+        
+        # Create vertices with hexagonal positioning
+        for row in range(height):
+            for col in range(width):
+                vertex_id = row * width + col
+                
+                # Calculate hexagonal grid position
+                # Odd rows are offset by 0.5 in x direction
+                x = col + (0.5 if row % 2 == 1 else 0.0)
+                y = row * (math.sqrt(3) / 2)  # Vertical spacing for hexagons
+                position = (x, y)
+                
+                # Determine vertex weight
+                if vertex_weight_range is not None:
+                    min_weight, max_weight = vertex_weight_range
+                    weight = random.randint(min_weight, max_weight)
+                else:
+                    weight = 1
+                
+                vertex = Vertex(vertex_id, weight, position)
+                self.add_vertex(vertex)
+        
+        # Create hexagonal connections (each vertex connects to 6 neighbors)
+        for row in range(height):
+            for col in range(width):
+                current_id = row * width + col
+                
+                # Get all 6 potential neighbors for hexagonal grid
+                neighbors = self._get_hex_neighbors(col, row, width, height)
+                
+                # Add edges to all valid neighbors
+                for neighbor_col, neighbor_row in neighbors:
+                    neighbor_id = neighbor_row * width + neighbor_col
+                    # Add bidirectional edge if it doesn't already exist
+                    if current_id < neighbor_id:  # Avoid duplicate edges
+                        self.add_edge(current_id, neighbor_id)
+                        self.add_edge(neighbor_id, current_id)
+        
+        # Remove vertices randomly while maintaining connectivity
+        if vertex_remove_probability is not None:
+            self._remove_vertices_randomly(vertex_remove_probability)
+
+    def _get_hex_neighbors(self, col: int, row: int, width: int, height: int) -> list:
+        """
+        Get the valid hexagonal neighbors for a given position.
+        
+        Args:
+            col: Column of the current hex
+            row: Row of the current hex
+            width: Width of the grid
+            height: Height of the grid
+            
+        Returns:
+            List of (col, row) tuples representing valid neighbor positions
+        """
+        neighbors = []
+        
+        if row % 2 == 0:  # Even row
+            # Potential neighbors for even rows
+            potential = [
+                (col - 1, row - 1),  # Northwest
+                (col, row - 1),      # Northeast
+                (col - 1, row),      # West
+                (col + 1, row),      # East
+                (col - 1, row + 1),  # Southwest
+                (col, row + 1)       # Southeast
+            ]
+        else:  # Odd row
+            # Potential neighbors for odd rows (offset)
+            potential = [
+                (col, row - 1),      # Northwest
+                (col + 1, row - 1),  # Northeast
+                (col - 1, row),      # West
+                (col + 1, row),      # East
+                (col, row + 1),      # Southwest
+                (col + 1, row + 1)   # Southeast
+            ]
+        
+        # Filter out invalid positions (outside grid boundaries)
+        for neighbor_col, neighbor_row in potential:
+            if (0 <= neighbor_col < width and 0 <= neighbor_row < height):
+                neighbors.append((neighbor_col, neighbor_row))
+        
+        return neighbors
 
 
 class Player:
