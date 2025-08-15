@@ -114,10 +114,6 @@ class GameInstance:
                 logger.warning(f"Game {self.game_id}: Cannot spawn bots - game already started")
                 return False
             
-            if num_bots < 1 or num_bots > 7:  # Reasonable limits
-                logger.warning(f"Game {self.game_id}: Invalid number of bots requested: {num_bots}")
-                return False
-            
             if difficulty not in ["easy", "medium", "hard"]:
                 logger.warning(f"Game {self.game_id}: Invalid difficulty requested: {difficulty}")
                 return False
@@ -148,7 +144,7 @@ class GameInstance:
             
             # Spawn the bots
             for i in range(num_bots):
-                bot_id = f"{bot_prefix}_{i+1}_{self.game_id}"
+                bot_id = f"{bot_prefix}_{len(self.spawned_bots) + i + 1}_{self.game_id}"
                 bot_task = asyncio.create_task(self._run_bot(bot_class, bot_id))
                 self.spawned_bots.append(bot_task)
             

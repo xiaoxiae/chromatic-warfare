@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chromatic Warfare</title>
+    <link rel="stylesheet" href="./src/style.css">
+</head>
+<body class="font-sans bg-solarized-base3 text-solarized-base00 overflow-hidden h-screen">
+    <div class="fixed inset-0">
+        <div class="absolute top-0 left-0 md:right-64 right-0 bottom-0">
+            <div class="absolute top-0 left-0 right-0 bg-solarized-base2/95 backdrop-blur-md p-4 px-6 border-b border-solarized-base1/20 shadow-lg">
+                <div class="flex flex-col gap-3">
+                    <div class="flex items-center justify-center">
+                        <h1 class="text-2xl font-light text-solarized-base01 tracking-wide">Chromatic Warfare</h1>
+                    </div>
+                        <button id="menuToggle" class="md:hidden fixed right-5 py-1 px-2.5 text-solarized-base01 hover:text-solarized-base00 transition-colors rounded-lg hover:bg-solarized-base3/40">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+                            </svg>
+                        </button>
+                    
+                    <div class="flex items-center gap-4 text-sm justify-center">
+                        <!-- Connection Status -->
+                        <div class="flex items-center gap-2.5 bg-solarized-base3/40 rounded-full px-3 py-1.5 border border-solarized-base1/20 h-8">
+                            <span class="w-3 h-3 rounded-full bg-solarized-yellow animate-pulse" id="connectionStatus"></span>
+                            <span class="hidden md:block text-solarized-base01 font-medium" id="connectionText">Connecting...</span>
+                        </div>
+                        
+                        <!-- Turn Progress -->
+                        <div class="flex items-center gap-2.5 bg-solarized-base3/40 rounded-full px-3 py-1.5 border border-solarized-base1/20 h-8">
+                            <svg class="w-4 h-4 text-solarized-blue" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                            </svg>
+                            <span class="text-solarized-base01 font-mono" id="currentTurn">-</span>
+                            <span class="text-solarized-base1 font-mono text-xs" id="turnProgress"> / -</span>
+                        </div>
+                        
+                        <!-- Turn Duration -->
+                        <div class="flex items-center gap-2.5 bg-solarized-base3/40 rounded-full px-3 py-1.5 border border-solarized-base1/20 h-8">
+                            <svg class="w-4 h-4 text-solarized-orange" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            <span class="text-solarized-base01 font-mono" id="turnDuration">-</span>
+                            <span class="text-solarized-base1 text-xs">s</span>
+                        </div>
+                        
+                        <!-- Game Status -->
+                        <div class="flex items-center gap-2.5 bg-solarized-base3/40 rounded-full px-3 py-1.5 border border-solarized-base1/20 h-8">
+                            <svg class="w-4 h-4 text-solarized-violet" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            <span class="text-solarized-base01 font-medium capitalize" id="gameStatus">Waiting</span>
+                        </div>
+                    </div>
+
+                    <!-- Game ID Input -->
+                    <div class="flex items-center justify-center gap-3">
+                        <label for="gameIdInput" class="text-sm text-solarized-base01 font-medium">Game ID:</label>
+                        <div class="flex items-center gap-2">
+                            <input 
+                                type="text" 
+                                id="gameIdInput" 
+                                placeholder="Enter game ID..."
+                                class="px-3 py-1.5 text-sm bg-solarized-base3/60 border border-solarized-base1/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 focus:border-solarized-blue text-solarized-base00 placeholder-solarized-base1"
+                                style="min-width: 120px;"
+                            >
+                            <button 
+                                id="joinGameBtn"
+                                class="px-3 py-1.5 text-sm bg-solarized-blue text-solarized-base3 rounded-lg hover:bg-solarized-cyan transition-colors focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 font-medium"
+                            >
+                                Join
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="absolute top-40 left-0 right-0 bottom-0">
+                <canvas id="gameCanvas" class="w-full h-full block"></canvas>
+            </div>
+            
+            <div class="absolute inset-0 bg-solarized-base3/90 backdrop-blur-md hidden flex-col justify-center items-center z-50" id="gameOverOverlay">
+                <div class="bg-solarized-base2/90 rounded-2xl p-10 text-center max-w-md border-2 border-solarized-base1/30">
+                    <h2 class="text-4xl mb-5 bg-gradient-to-r from-solarized-yellow to-solarized-orange bg-clip-text text-transparent">Game Over!</h2>
+                    <div class="text-lg mb-5" id="winnerList"></div>
+                    <div class="text-left mt-5" id="finalRankings"></div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Mobile sidebar overlay -->
+        <div id="sidebarOverlay" class="md:hidden fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm z-40 hidden"></div>
+        
+        <!-- Sidebar -->
+        <div id="sidebar" class="absolute top-0 md:right-0 -right-64 md:w-64 w-64 h-full bg-solarized-base2/80 backdrop-blur-xl border-l-2 border-solarized-base1/30 flex flex-col transition-all duration-300 ease-in-out z-50 md:z-auto">
+            <div class="p-5 border-b border-solarized-base1/30">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-base font-medium text-solarized-base01">Players</h3>
+                    <button id="closeSidebar" class="md:hidden p-1 text-solarized-base01 hover:text-solarized-base00 transition-colors">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+                <div class="flex flex-col gap-3" id="playerList">
+                    <!-- Players will be populated here -->
+                </div>
+            </div>
+            
+            <div class="px-5 pt-5 border-solarized-base1/30">
+                <h3 class="text-base font-medium mb-4 text-solarized-base01">Game Log</h3>
+            </div>
+            
+            <div class="flex-1 px-5 overflow-y-auto" id="gameLog">
+                <!-- Log entries will be populated here -->
+            </div>
+            
+            <div class="p-4 border-t border-solarized-base1/30 text-xs text-solarized-base01/70">
+                <div class="text-center space-y-1">
+                    <div>
+                        Created by <a href="https://slama.dev/" target="_blank" rel="noopener noreferrer" class="text-solarized-blue hover:text-solarized-cyan transition-colors underline">Tomáš Sláma</a>
+                    </div>
+                    <div>
+                        <a href="https://github.com/xiaoxiae/chromatic-warfare" target="_blank" rel="noopener noreferrer" class="text-solarized-green hover:text-solarized-yellow transition-colors underline">View Source Code</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="./src/main.js"></script>
+    <script>
+        // Mobile menu functionality
+        const menuToggle = document.getElementById('menuToggle');
+        const sidebar = document.getElementById('sidebar');
+        const sidebarOverlay = document.getElementById('sidebarOverlay');
+        const closeSidebar = document.getElementById('closeSidebar');
+
+        function openSidebar() {
+            sidebar.classList.remove('-right-64');
+            sidebar.classList.add('right-0');
+            sidebarOverlay.classList.remove('hidden');
+        }
+
+        function closeSidebarMenu() {
+            sidebar.classList.remove('right-0');
+            sidebar.classList.add('-right-64');
+            sidebarOverlay.classList.add('hidden');
+        }
+
+        menuToggle.addEventListener('click', openSidebar);
+        closeSidebar.addEventListener('click', closeSidebarMenu);
+        sidebarOverlay.addEventListener('click', closeSidebarMenu);
+
+        // Close sidebar on escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeSidebarMenu();
+            }
+        });
+
+        // Game ID functionality
+        const gameIdInput = document.getElementById('gameIdInput');
+        const joinGameBtn = document.getElementById('joinGameBtn');
+
+        // Set current game ID in input
+        const urlParams = new URLSearchParams(window.location.search);
+        const currentGameId = urlParams.get('game') || 'default';
+        gameIdInput.value = currentGameId;
+
+        function joinGame() {
+            const gameId = gameIdInput.value.trim();
+            if (!gameId) {
+                gameIdInput.focus();
+                return;
+            }
+
+            // Update URL with new game ID
+            const newUrl = new URL(window.location);
+            newUrl.searchParams.set('game', gameId);
+            window.location.href = newUrl.toString();
+        }
+
+        joinGameBtn.addEventListener('click', joinGame);
+
+        // Allow Enter key to join game
+        gameIdInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                joinGame();
+            }
+        });
+
+        // Focus input when clicked
+        gameIdInput.addEventListener('focus', () => {
+            gameIdInput.select();
+        });
+    </script>
+</body>
+</html>

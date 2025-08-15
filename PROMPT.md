@@ -1,3 +1,9 @@
+# Prompt
+
+This project has been heavily bootstrapped by [Claude](https://claude.ai/), following the [following LLM codegen workflow article](https://harper.blog/2025/02/16/my-llm-codegen-workflow-atm/).
+I'm happy with the results, learning quite a bit about the strengths and weaknesses of this approach in the process.
+
+```markdown
 You are implementing a turn-based strategy game system designed for bot competitions and livestream tournaments. This is a multi-component system with a Python WebSocket server, web-based visualization, and bot client libraries.
 
 ## Project Context
@@ -92,3 +98,4 @@ You're building a competitive gaming platform where:
 - Spectators will watch via the web interface - ensure smooth, responsive visualization
 
 Focus on building production-quality code that handles edge cases gracefully and performs well under load.
+```
