@@ -488,7 +488,17 @@ updateGenerationAnimation(progress) {
         });
     }
 
-    connectToServer(url = 'ws://localhost:8765') {
+    connectToServer(url) {
+        // Determine URL based on environment
+        if (!url) {
+            if (import.meta.env.DEV) {
+                url = 'ws://localhost:8765';
+            } else {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                url = `${protocol}//${window.location.host}/api`;
+            }
+        }
+
         this.addLogEntry(`Attempting to connect to game server for game ${this.gameId}...`, 'system');
         
         try {

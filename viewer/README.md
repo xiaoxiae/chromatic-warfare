@@ -2,7 +2,6 @@
 
 A web-based viewer for Chromatic Warfare.
 
-
 ## Setup Instructions
 
 1. **Install dependencies**:
@@ -22,17 +21,14 @@ A web-based viewer for Chromatic Warfare.
    ```
    Output will be in the `dist/` directory
 
-## Usage
+## WebSocket Connection
 
-The viewer connects to a WebSocket server (default: `ws://localhost:8765`) and displays:
+The viewer automatically connects to the appropriate WebSocket server based on the environment:
 
-- Live game state with animated unit movements
-- Player list with real-time status updates
-- Game log with turn-by-turn actions
-- Canvas-based graph visualization
-- Combat animations and unit generation effects
+- **Development**: Connects to `ws://localhost:8765` 
+- **Production**: Connects to `/api` endpoint (with proper WebSocket protocol based on the current domain)
 
-You can specify a game ID using the URL parameter: `?game=your-game-id`
+In production, the WebSocket server should be hosted at the `/api` path.
 
 ## Development
 
@@ -41,5 +37,3 @@ The project uses:
 - **Tailwind CSS** for utility-first styling
 - **PostCSS** for CSS processing
 - **ES6 modules** for clean code organization
-
-All the original game logic and animation systems are preserved while providing a modern development experience.
