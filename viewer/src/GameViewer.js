@@ -173,7 +173,7 @@ sendForceStart() {
         // Phase timings (as percentages of turn duration)
         const movementEnd = 0.30;
         const stateChangeEnd = 0.35; // Very brief instant snap
-        const generationEnd = 0.45;
+        const generationEnd = 0.55;
         
         
         if (progress <= movementEnd) {
@@ -442,10 +442,6 @@ updateGenerationAnimation(progress) {
         return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
     }
 
-    easeOutCubic(t) {
-        return 1 - Math.pow(1 - t, 3);
-    }
-
     getVertexPosition(vertexId, scale, offsetX, offsetY) {
         if (!this.gameState || !this.gameState.graph) return null;
         
@@ -531,13 +527,13 @@ updateGenerationAnimation(progress) {
             this.socket.onerror = (error) => {
                 console.error('WebSocket error:', error);
                 this.updateConnectionStatus('error', 'Connection error');
-                this.addLogEntry('Connection error occurred', 'system');
+                this.addLogEntry('Connection error occurred', 'error');
             };
             
         } catch (error) {
             console.error('Failed to create WebSocket connection:', error);
             this.updateConnectionStatus('error', 'Failed to connect');
-            this.addLogEntry('Failed to connect to server', 'system');
+            this.addLogEntry('Failed to connect to server', 'error');
         }
     }
 
@@ -565,12 +561,45 @@ updateGenerationAnimation(progress) {
                 this.addLogEntry(`✓ ${data.message}`, 'system');
                 break;
             case 'error':
-                this.addLogEntry(`Server error: ${data.message}`, 'system');
+                this.addLogEntry(`Server error: ${data.message}`, 'error');
                 break;
             default:
                 console.log('Unknown message type:', data.type);
         }
     }
+
+getLowestAvailableColorIndex() {
+    const usedIndices = new Set();
+    
+    // Collect all currently used color indices
+    Object.values(this.playerColors).forEach(color => {
+        const index = this.colorPalette.indexOf(color);
+        if (index !== -1) {
+            usedIndices.add(index);
+        }
+    });
+    
+    // Find the lowest unused index
+    for (let i = 0; i < this.colorPalette.length; i++) {
+        if (!usedIndices.has(i)) {
+            return i;
+        }
+    }
+    
+    // If all colors are used, cycle back (shouldn't happen with 8 colors typically)
+    return usedIndices.size % this.colorPalette.length;
+}
+
+cleanupDisconnectedPlayerColors(currentPlayers) {
+    const currentPlayerIds = new Set(currentPlayers.map(p => p.id));
+    
+    // Remove colors for players no longer in the game
+    Object.keys(this.playerColors).forEach(playerId => {
+        if (!currentPlayerIds.has(playerId)) {
+            delete this.playerColors[playerId];
+        }
+    });
+}
 
     handleGameReset() {
         console.log('Game reset received');
@@ -589,7 +618,6 @@ updateGenerationAnimation(progress) {
         
         // Reset player colors (will be reassigned when new players join)
         this.playerColors = {};
-        this.colorIndex = 0;
         this.previousPlayers.clear();
         
         // Reset UI elements
@@ -610,9 +638,6 @@ updateGenerationAnimation(progress) {
         const ctx = this.ctx;
         const rect = this.canvas.getBoundingClientRect();
         ctx.clearRect(0, 0, rect.width, rect.height);
-        
-        // Add log entry
-        this.addLogEntry(`Game ${this.gameId} has been reset`, 'game-event');
     }
 
     handleTurnProcessed(turnData) {
@@ -1024,9 +1049,6 @@ updateGenerationAnimation(progress) {
         
         // Draw moving units
         this.renderMovingUnits();
-        
-        // Draw unit generation animations (+Weight text)
-        this.renderUnitGenerationAnimations();
     }
 
 renderVertex(vertex, scale, offsetX, offsetY) {
@@ -1144,46 +1166,6 @@ if (vertex.sizeMultiplier) {
         });
     }
 
-    renderUnitGenerationAnimations() {
-        const ctx = this.ctx;
-        
-        this.unitGenerationAnimations.forEach(anim => {
-            if (anim.alpha <= 0) return;
-            
-            ctx.save();
-            ctx.globalAlpha = anim.alpha;
-            
-            // Draw +Weight text
-            const text = `+${anim.weight}`;
-            const x = anim.x;
-            const y = anim.y + anim.offsetY;
-            
-            // Get the vertex color from displayed vertices
-            const displayVertex = this.displayedVertices.get(anim.vertexId);
-            let textColor = '#657b83'; /* Solarized light base00 as default */
-            
-            if (displayVertex && displayVertex.controller) {
-                textColor = this.playerColors[displayVertex.controller] || '#657b83';
-            }
-            
-            // Text styling
-            ctx.fillStyle = textColor;
-            ctx.font = 'bold 16px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            
-            // Add text shadow for better visibility
-            ctx.shadowColor = 'rgba(253, 246, 227, 0.8)'; /* Solarized light base3 */
-            ctx.shadowBlur = 4;
-            ctx.shadowOffsetX = 1;
-            ctx.shadowOffsetY = 1;
-            
-            ctx.fillText(text, x, y);
-            
-            ctx.restore();
-        });
-    }
-
     interpolateColor(color1, color2, t) {
         // Simple color interpolation for RGB hex colors
         if (typeof color1 === 'string' && color1.startsWith('#') && 
@@ -1241,6 +1223,9 @@ if (vertex.sizeMultiplier) {
 updatePlayers(players) {
     const playerList = document.getElementById('playerList');
     
+    // Clean up colors for disconnected players first
+    this.cleanupDisconnectedPlayerColors(players);
+    
     // Check for player status changes before updating UI
     this.logPlayerStatusChanges(players);
     
@@ -1277,10 +1262,10 @@ updatePlayers(players) {
     const gameEnded = this.gameState && this.gameState.game_status === 'ended';
     
     sortedPlayers.forEach((player, index) => {
-        // Assign color if not already assigned
+        // Assign color using lowest available index if not already assigned
         if (!this.playerColors[player.id]) {
-            this.playerColors[player.id] = this.colorPalette[this.colorIndex % this.colorPalette.length];
-            this.colorIndex++;
+            const colorIndex = this.getLowestAvailableColorIndex();
+            this.playerColors[player.id] = this.colorPalette[colorIndex];
         }
         
         const playerCard = document.createElement('div');

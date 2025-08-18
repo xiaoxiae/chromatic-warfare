@@ -43,7 +43,7 @@
     @apply text-xs py-1.5 border-b border-solarized-base1/10 opacity-80;
   }
   
-  .log-entry.elimination {
+  .log-entry.error {
     @apply text-solarized-red font-medium;
   }
   
