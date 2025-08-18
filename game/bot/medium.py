@@ -4,11 +4,11 @@ import sys
 from typing import List
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from botlib import GameBot, GameState, Command
+from botlib import GameBot, Game, Command
 
 
 class MediumBot(GameBot):
-    def play_turn(self, game_state: GameState) -> List[Command]:
+    def play_turn(self, game: Game) -> List[Command]:
         """
         - Move units from interior vertices to frontline vertices
         - Capture neighbouring neutral vertices
@@ -19,13 +19,13 @@ class MediumBot(GameBot):
         """Move units from interior vertices evenly to all closer neighbors."""
         commands = []
         
-        for vertex in self.game_state.my_vertices:
-            distance_to_frontline = self.get_distance_to_frontline(vertex.id)
+        for vertex in self.game.my_vertices:
+            distance_to_frontline = self.game.get_distance_to_frontline(vertex.id)
             
             # Find all neighbors that are closer to frontline
             closer_neighbors = []
-            for neighbor in self.game_state.get_my_neighbors(vertex.id):
-                neighbor_distance = self.get_distance_to_frontline(neighbor.id)
+            for neighbor in self.game.get_my_neighbors(vertex.id):
+                neighbor_distance = self.game.get_distance_to_frontline(neighbor.id)
 
                 if neighbor_distance >= 0 and neighbor_distance < distance_to_frontline:
                     closer_neighbors.append(neighbor)
@@ -45,9 +45,9 @@ class MediumBot(GameBot):
         """Expand to neutral vertices from frontline positions using all available units."""
         commands = []
         
-        for vertex in self.get_frontline_vertices():
+        for vertex in self.game.get_frontline_vertices():
             # Find weakest neutral neighbour
-            neutral_neighbors = self.game_state.get_neutral_neighbors(vertex.id)
+            neutral_neighbors = self.game.get_neutral_neighbors(vertex.id)
 
             if not neutral_neighbors:
                 continue
@@ -58,7 +58,7 @@ class MediumBot(GameBot):
                 continue
             
             # Capture with all units if we can
-            if self.game_state.can_capture(vertex.id, weakest_neutral.id, vertex.units):
+            if self.game.can_capture(vertex.id, weakest_neutral.id, vertex.units):
                 command = self.move_all(vertex, weakest_neutral)
                 commands.append(command)
         

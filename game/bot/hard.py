@@ -4,11 +4,11 @@ import sys
 from typing import List
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from botlib import GameBot, GameState, Command
+from botlib import GameBot, Game, Command
 
 
 class HardBot(GameBot):
-    def play_turn(self, game_state: GameState) -> List[Command]:
+    def play_turn(self, game: Game) -> List[Command]:
         """
         Enhanced strategy that includes:
         - Attack enemy vertices when advantageous
@@ -24,9 +24,9 @@ class HardBot(GameBot):
         """Attack enemy vertices from frontline positions when we have superiority."""
         commands = []
         
-        for vertex in self.get_frontline_vertices():
+        for vertex in self.game.get_frontline_vertices():
             # Find all enemy neighbors we can capture
-            enemy_neighbors = self.game_state.get_enemy_neighbors(vertex.id)
+            enemy_neighbors = self.game.get_enemy_neighbors(vertex.id)
             
             if not enemy_neighbors:
                 continue
@@ -34,7 +34,7 @@ class HardBot(GameBot):
             # Find the most valuable enemy target we can capture
             capturable_enemies = []
             for enemy in enemy_neighbors:
-                if self.game_state.can_capture(vertex.id, enemy.id, vertex.units):
+                if self.game.can_capture(vertex.id, enemy.id, vertex.units):
                     # Calculate value: units gained vs units spent
                     units_gained = enemy.units
                     units_spent = enemy.units + 1  # minimum needed to capture
@@ -61,8 +61,8 @@ class HardBot(GameBot):
         """Move units from interior vertices to frontline vertices, prioritizing weaker frontline positions."""
         commands = []
         
-        for vertex in self.game_state.my_vertices:
-            distance_to_frontline = self.get_distance_to_frontline(vertex.id)
+        for vertex in self.game.my_vertices:
+            distance_to_frontline = self.game.get_distance_to_frontline(vertex.id)
             
             # Skip if this vertex is already on frontline or has no path to frontline
             if distance_to_frontline <= 0:
@@ -70,8 +70,8 @@ class HardBot(GameBot):
             
             # Find all neighbors that are closer to frontline
             closer_neighbors = []
-            for neighbor in self.game_state.get_my_neighbors(vertex.id):
-                neighbor_distance = self.get_distance_to_frontline(neighbor.id)
+            for neighbor in self.game.get_my_neighbors(vertex.id):
+                neighbor_distance = self.game.get_distance_to_frontline(neighbor.id)
                 if neighbor_distance >= 0 and neighbor_distance < distance_to_frontline:
                     closer_neighbors.append(neighbor)
             
@@ -91,12 +91,12 @@ class HardBot(GameBot):
         """Expand to neutral vertices from frontline positions, targeting the most efficient captures."""
         commands = []
         
-        for vertex in self.get_frontline_vertices():
+        for vertex in self.game.get_frontline_vertices():
             # Skip if we already used this vertex for attacking enemies
             if any(cmd.from_vertex == vertex.id for cmd in commands):
                 continue
                 
-            neutral_neighbors = self.game_state.get_neutral_neighbors(vertex.id)
+            neutral_neighbors = self.game.get_neutral_neighbors(vertex.id)
             
             if not neutral_neighbors:
                 continue
@@ -104,7 +104,7 @@ class HardBot(GameBot):
             # Find the most efficient neutral target (lowest weight = easiest to capture)
             capturable_neutrals = []
             for neutral in neutral_neighbors:
-                if self.game_state.can_capture(vertex.id, neutral.id, vertex.units):
+                if self.game.can_capture(vertex.id, neutral.id, vertex.units):
                     # Efficiency = units gained per unit spent
                     efficiency = neutral.weight / max(1, neutral.weight)  # avoid division by zero
                     capturable_neutrals.append((neutral, efficiency))

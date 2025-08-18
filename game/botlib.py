@@ -13,7 +13,7 @@ Usage:
 
 Example:
     class MyBot(GameBot):
-        def play_turn(self, game_state):
+        def play_turn(self, game):
             # Simple strategy: attack weakest neighbor
             for vertex in self.my_vertices:
                 weak_enemy = self.find_weakest_enemy_neighbor(vertex)
@@ -106,7 +106,7 @@ class Command:
         }
 
 
-class GameState:
+class Game:
     """
     Convenient wrapper around the raw game state that provides
     easy access to game information and relationships.
@@ -211,6 +211,82 @@ class GameState:
         # Cost equals defending units for enemy vertices
         return target.units
     
+    def get_frontline_vertices(self) -> List[Vertex]:
+        """Get vertices that have enemy or neutral neighbors."""
+        if not self.game:
+            return []
+        
+        frontline = []
+        for vertex in self.game.my_vertices:
+            neighbors = self.game.get_neighbors(vertex.id)
+            if any(not n.is_mine for n in neighbors):
+                frontline.append(vertex)
+        
+        return frontline
+    
+    def get_distance_to_frontline(self, vertex_id: int) -> int:
+        """
+        Calculate the shortest distance from a vertex to the nearest frontline vertex.
+        
+        A frontline vertex is one that has enemy or neutral neighbors.
+        Returns 0 if the vertex itself is on the frontline.
+        Returns -1 if the vertex is not mine or doesn't exist.
+        
+        Args:
+            vertex_id: ID of the vertex to check
+            
+        Returns:
+            Number of steps to nearest frontline vertex, or -1 if invalid
+        """
+        if not self.game:
+            return -1
+        
+        vertex = self.game.get_vertex(vertex_id)
+        if not vertex or not vertex.is_mine:
+            return -1
+        
+        # BFS to find shortest distance to frontline
+        from collections import deque
+        
+        # Get all frontline vertices
+        frontline_ids = {v.id for v in self.get_frontline_vertices()}
+        
+        if not frontline_ids:
+            # No frontline exists (all vertices are interior or we have no territory)
+            return -1
+        
+        if vertex_id in frontline_ids:
+            # This vertex is already on the frontline
+            return 0
+        
+        # BFS from the given vertex to find closest frontline
+        queue = deque([(vertex_id, 0)])
+        visited = {vertex_id}
+        
+        while queue:
+            current_id, distance = queue.popleft()
+            
+            # Check all neighbors
+            for neighbor in self.game.get_neighbors(current_id):
+                if neighbor.id in visited:
+                    continue
+                
+                # Only traverse through my own vertices
+                if not neighbor.is_mine:
+                    continue
+                
+                visited.add(neighbor.id)
+                
+                # If this neighbor is on the frontline, we found our answer
+                if neighbor.id in frontline_ids:
+                    return distance + 1
+                
+                # Otherwise, continue searching
+                queue.append((neighbor.id, distance + 1))
+        
+        # No path found (shouldn't happen if graph is connected)
+        return -1
+    
     @property
     def my_player(self) -> Optional[Player]:
         """Get my player object."""
@@ -252,13 +328,13 @@ class GameBot(ABC):
         self.game_id = game_id if game_id is not None else "default"
         self.server_url = server_url
         self.websocket = None
-        self.game_state = None
+        self.game = None
         self.running = False
         self.request_bots_config = request_bots
         
         # Callbacks
         self.on_connection_confirmed: Optional[Callable[[Dict], None]] = None
-        self.on_game_started: Optional[Callable[[GameState], None]] = None
+        self.on_game_started: Optional[Callable[[Game], None]] = None
         self.on_game_ended: Optional[Callable[[Dict], None]] = None
         self.on_turn_processed: Optional[Callable[[Dict], None]] = None
         
@@ -306,12 +382,12 @@ class GameBot(ABC):
             asyncio.create_task(self.request_bots(num_bots, difficulty))
     
     @abstractmethod
-    def play_turn(self, game_state: GameState) -> List[Command]:
+    def play_turn(self, game: Game) -> List[Command]:
         """
         Main bot logic - implement this method.
         
         Args:
-            game_state: Current state of the game
+            game: Current state of the game
             
         Returns:
             List of commands to execute this turn
@@ -327,82 +403,6 @@ class GameBot(ABC):
     def move_all(self, from_vertex: Vertex, to_vertex: Vertex) -> Command:
         """Move all units."""
         return Command(from_vertex.id, to_vertex.id, from_vertex.units)
-    
-    def get_frontline_vertices(self) -> List[Vertex]:
-        """Get vertices that have enemy or neutral neighbors."""
-        if not self.game_state:
-            return []
-        
-        frontline = []
-        for vertex in self.game_state.my_vertices:
-            neighbors = self.game_state.get_neighbors(vertex.id)
-            if any(not n.is_mine for n in neighbors):
-                frontline.append(vertex)
-        
-        return frontline
-    
-    def get_distance_to_frontline(self, vertex_id: int) -> int:
-        """
-        Calculate the shortest distance from a vertex to the nearest frontline vertex.
-        
-        A frontline vertex is one that has enemy or neutral neighbors.
-        Returns 0 if the vertex itself is on the frontline.
-        Returns -1 if the vertex is not mine or doesn't exist.
-        
-        Args:
-            vertex_id: ID of the vertex to check
-            
-        Returns:
-            Number of steps to nearest frontline vertex, or -1 if invalid
-        """
-        if not self.game_state:
-            return -1
-        
-        vertex = self.game_state.get_vertex(vertex_id)
-        if not vertex or not vertex.is_mine:
-            return -1
-        
-        # BFS to find shortest distance to frontline
-        from collections import deque
-        
-        # Get all frontline vertices
-        frontline_ids = {v.id for v in self.get_frontline_vertices()}
-        
-        if not frontline_ids:
-            # No frontline exists (all vertices are interior or we have no territory)
-            return -1
-        
-        if vertex_id in frontline_ids:
-            # This vertex is already on the frontline
-            return 0
-        
-        # BFS from the given vertex to find closest frontline
-        queue = deque([(vertex_id, 0)])
-        visited = {vertex_id}
-        
-        while queue:
-            current_id, distance = queue.popleft()
-            
-            # Check all neighbors
-            for neighbor in self.game_state.get_neighbors(current_id):
-                if neighbor.id in visited:
-                    continue
-                
-                # Only traverse through my own vertices
-                if not neighbor.is_mine:
-                    continue
-                
-                visited.add(neighbor.id)
-                
-                # If this neighbor is on the frontline, we found our answer
-                if neighbor.id in frontline_ids:
-                    return distance + 1
-                
-                # Otherwise, continue searching
-                queue.append((neighbor.id, distance + 1))
-        
-        # No path found (shouldn't happen if graph is connected)
-        return -1
     
     def build_command(self, from_id: int, to_id: int, units: int) -> Command:
         """Build a command with raw vertex IDs."""
@@ -477,19 +477,19 @@ class GameBot(ABC):
                 
         elif message_type == "game_state":
             # Update game state
-            self.game_state = GameState(message, self.player_id)
+            self.game = Game(message, self.player_id)
             
             # Check if game just started
-            if self.game_state.is_game_active and self.on_game_started:
-                self.on_game_started(self.game_state)
+            if self.game.is_game_active and self.on_game_started:
+                self.on_game_started(self.game)
             
             # If it's my turn and game is active, play
-            if (self.game_state.is_game_active and 
-                self.game_state.my_player and 
-                self.game_state.my_player.is_active):
+            if (self.game.is_game_active and 
+                self.game.my_player and 
+                self.game.my_player.is_active):
                 
                 try:
-                    commands = self.play_turn(self.game_state)
+                    commands = self.play_turn(self.game)
                     if commands is None:
                         commands = []
                     await self.send_commands(commands)
@@ -499,7 +499,7 @@ class GameBot(ABC):
                     await self.send_commands([])
             
             # Check if game ended
-            if self.game_state.is_game_ended and self.on_game_ended:
+            if self.game.is_game_ended and self.on_game_ended:
                 self.on_game_ended(message)
                 
         elif message_type == "game_over":
@@ -516,7 +516,7 @@ class GameBot(ABC):
                 
         elif message_type == "game_reset":
             logger.info(f"[{self.player_id}] Game reset")
-            self.game_state = None
+            self.game = None
             
         elif message_type == "error":
             error_msg = message.get("message", "Unknown error")

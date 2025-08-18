@@ -4,11 +4,11 @@ import sys
 from typing import List
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from botlib import GameBot, GameState, Command
+from botlib import GameBot, Game, Command
 
 
 class EasyBot(GameBot):
-    def play_turn(self, game_state: GameState) -> List[Command]:
+    def play_turn(self, game: Game) -> List[Command]:
         """
         - Capture neighbouring neutral vertices
         """
@@ -18,9 +18,9 @@ class EasyBot(GameBot):
         """Expand to neutral vertices from frontline positions using all available units."""
         commands = []
         
-        for vertex in self.get_frontline_vertices():
+        for vertex in self.game.get_frontline_vertices():
             # Find weakest neutral neighbour
-            neutral_neighbors = self.game_state.get_neutral_neighbors(vertex.id)
+            neutral_neighbors = self.game.get_neutral_neighbors(vertex.id)
 
             if not neutral_neighbors:
                 continue
@@ -31,7 +31,7 @@ class EasyBot(GameBot):
                 continue
             
             # Capture with all units if we can
-            if self.game_state.can_capture(vertex.id, weakest_neutral.id, vertex.units):
+            if self.game.can_capture(vertex.id, weakest_neutral.id, vertex.units):
                 command = self.move_all(vertex, weakest_neutral)
                 commands.append(command)
         
