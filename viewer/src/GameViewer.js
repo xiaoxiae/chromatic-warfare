@@ -12,6 +12,11 @@ export class GameViewer {
         ];
         this.colorIndex = 0;
         this.previousPlayers = new Map(); // Track previous player states
+    
+        // Connect settings UI to this viewer instance
+        if (typeof window.connectSettingsToGameViewer === 'function') {
+            window.connectSettingsToGameViewer(this);
+        }
         
         // Animation system
         this.isAnimating = false;
@@ -35,6 +40,94 @@ export class GameViewer {
         this.setupResizeHandler();
         this.startRenderLoop();
     }
+
+    sendGameSettings(maxTurns, turnDuration) {
+        if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+            this.addLogEntry('Cannot send settings - not connected to server', 'system');
+            return;
+        }
+    
+        // Send max turns setting
+        this.socket.send(JSON.stringify({
+            type: 'server_command',
+            command: 'set_turns',
+            game_id: this.gameId,
+            max_turns: maxTurns
+        }));
+    
+        // Send turn duration setting
+        this.socket.send(JSON.stringify({
+            type: 'server_command',
+            command: 'set_duration',
+            game_id: this.gameId,
+            duration: turnDuration
+        }));
+    
+        this.addLogEntry(`Settings applied: ${maxTurns} max turns, ${turnDuration}s duration`, 'system');
+    }
+
+sendMapSettings(mapType, width, height, weightMin, weightMax, removeProb) {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+        this.addLogEntry('Cannot send settings - not connected to server', 'system');
+        return;
+    }
+
+    // Build map command with options
+    const options = [];
+    if (weightMin !== undefined && weightMax !== undefined) {
+        options.push(`weight_min=${weightMin}`);
+        options.push(`weight_max=${weightMax}`);
+    }
+    options.push(`remove_prob=${removeProb}`);
+    options.push(`maze_width=${width}`);
+    options.push(`maze_height=${height}`);
+
+    this.socket.send(JSON.stringify({
+        type: 'server_command',
+        command: 'map',
+        game_id: this.gameId,
+        map_type: mapType,
+        options: options
+    }));
+
+    this.addLogEntry(`Map settings applied: ${mapType} ${width}x${height}`, 'system');
+}
+
+/**
+ * Send reset game command to the server
+ */
+sendResetGame() {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+        this.addLogEntry('Cannot reset game - not connected to server', 'system');
+        return;
+    }
+
+    this.socket.send(JSON.stringify({
+        type: 'server_command',
+        command: 'reset',
+        game_id: this.gameId
+    }));
+
+    this.addLogEntry('Game reset requested', 'system');
+}
+
+/**
+ * Send force start command to the server
+ */
+sendForceStart() {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+        this.addLogEntry('Cannot force start - not connected to server', 'system');
+        return;
+    }
+
+    this.socket.send(JSON.stringify({
+        type: 'server_command',
+        command: 'start',
+        game_id: this.gameId
+    }));
+
+    this.addLogEntry('Force start requested', 'system');
+}
 
     getGameIdFromURL() {
         const urlParams = new URLSearchParams(window.location.search);
@@ -80,7 +173,7 @@ export class GameViewer {
         // Phase timings (as percentages of turn duration)
         const movementEnd = 0.30;
         const stateChangeEnd = 0.35; // Very brief instant snap
-        const generationEnd = 0.70;
+        const generationEnd = 0.45;
         
         
         if (progress <= movementEnd) {
@@ -210,17 +303,39 @@ export class GameViewer {
         }
     }
 
-    updateGenerationAnimation(progress) {
-        // Animate unit count increases from pre-generation to final state
-        const easedProgress = this.easeInOutCubic(progress);
+updateGenerationAnimation(progress) {
+    // Animate unit count increases from pre-generation to final state
+    const easedProgress = this.easeInOutCubic(progress);
+    
+    // Update vertex size animations for unit generation
+    this.unitGenerationAnimations.forEach(anim => {
+        const displayVertex = this.displayedVertices.get(anim.vertexId);
+        if (!displayVertex) return;
         
-        // Update +Weight text animations
-        this.unitGenerationAnimations.forEach(anim => {
-            // Float upward and fade out
-            anim.offsetY = (this.easeInOutCubic(1.0 - progress) * -30) -40; // Move up 40 pixels
-            anim.alpha = this.easeInOutCubic(1.0 - progress); // Fade out completely
-        });
-    }
+        // There-and-back size animation (0 -> 1 -> 0 over the generation phase)
+        let sizeMultiplier = 1.0;
+        if (progress <= 0.5) {
+            // First half: grow to 1.4x size
+            sizeMultiplier = 1.0 + (progress * 2) * 0.1; // 1.0 to 1.4
+        } else {
+            // Second half: shrink back to normal, then update units
+            const shrinkProgress = (progress - 0.5) * 2; // 0 to 1 for second half
+            sizeMultiplier = 1.1 - (shrinkProgress * 0.1); // 1.4 back to 1.0
+            
+            // At the end of the animation (progress > 0.9), update the unit count
+            if (progress > 0.9 && !displayVertex.unitsUpdated) {
+                const targetVertex = this.targetVertices.get(anim.vertexId);
+                if (targetVertex) {
+                    displayVertex.units = targetVertex.units;
+                    displayVertex.unitsUpdated = true;
+                }
+            }
+        }
+        
+        // Store the size multiplier for rendering
+        displayVertex.sizeMultiplier = sizeMultiplier;
+    });
+}
 
     getVertexScreenPosition(vertexId) {
         if (!this.gameState || !this.gameState.graph) return null;
@@ -445,6 +560,9 @@ export class GameViewer {
                 break;
             case 'game_created':
                 this.addLogEntry(`Game ${this.gameId} created successfully`, 'game-event');
+                break;
+            case 'command_success':
+                this.addLogEntry(`✓ ${data.message}`, 'system');
                 break;
             case 'error':
                 this.addLogEntry(`Server error: ${data.message}`, 'system');
@@ -911,61 +1029,83 @@ export class GameViewer {
         this.renderUnitGenerationAnimations();
     }
 
-    renderVertex(vertex, scale, offsetX, offsetY) {
-        const ctx = this.ctx;
-        const x = vertex.position[0] * scale + offsetX;
-        const y = vertex.position[1] * scale + offsetY;
-        
-        // Calculate adaptive radius based on scale
-        // Uses logarithmic scaling to make vertices smaller when zoomed in, but not linearly
-        const baseRadius = 35;
-        const minRadius = 18;
-        const maxRadius = 100;
-        
-        // Normalize scale (assuming typical scale range of 0.1 to 10)
-        const normalizedScale = Math.max(0.1, Math.min(10, scale));
-        const scaleLog = Math.log(normalizedScale + 1);
-        const maxScaleLog = Math.log(11); // log(10 + 1)
-        
-        // Inverse relationship: higher scale = smaller radius
-        const scaleFactor = 1 - (scaleLog / maxScaleLog) * 0.6; // 0.6 controls how much scaling affects size
-        const radius = Math.max(minRadius, Math.min(maxRadius, baseRadius * scaleFactor));
-        
-        // Determine vertex color
-        let fillColor = 'rgba(147, 161, 161, 1.0)'; // Fully opaque neutral vertex color
-        
-        if (vertex.controllerTransition !== undefined) {
-            // Animate color transition
-            const oldColor = vertex.controller ? this.playerColors[vertex.controller] : 'rgba(147, 161, 161, 1.0)';
-            const newColor = vertex.newController ? this.playerColors[vertex.newController] : 'rgba(147, 161, 161, 1.0)';
-            fillColor = this.interpolateColor(oldColor, newColor, vertex.controllerTransition);
-        } else if (vertex.controller) {
-            fillColor = this.playerColors[vertex.controller] || '#93a1a1';
-        }
-        
-        // Draw vertex circle (no stroke)
-        ctx.beginPath();
-        ctx.arc(x, y, radius, 0, 2 * Math.PI);
-        ctx.fillStyle = fillColor;
-        ctx.fill();
-        
-        // Draw unit count with adaptive font size
-        ctx.fillStyle = '#fdf6e3'; /* Solarized light base3 for high contrast */
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-
-        // Scale font size with radius
-        const baseFontSize = vertex.controller ? 14 : 10;
-        const fontSize = Math.max(8, baseFontSize * (radius / baseRadius));
-
-        if (vertex.controller) {
-          ctx.font = `bold ${fontSize}px sans-serif`;
-          ctx.fillText(vertex.units.toString(), x, y);
-        } else {
-          ctx.font = `bold ${fontSize}px sans-serif`;
-          ctx.fillText(vertex.weight.toString(), x, y);
-        }
+renderVertex(vertex, scale, offsetX, offsetY) {
+    const ctx = this.ctx;
+    const x = vertex.position[0] * scale + offsetX;
+    const y = vertex.position[1] * scale + offsetY;
+    
+    // Calculate adaptive radius based on scale
+    // Uses logarithmic scaling to make vertices smaller when zoomed in, but not linearly
+    const baseRadius = 35;
+    const minRadius = 18;
+    const maxRadius = 100;
+    
+    // Normalize scale (assuming typical scale range of 0.1 to 10)
+    const normalizedScale = Math.max(0.1, Math.min(10, scale));
+    const scaleLog = Math.log(normalizedScale + 1);
+    const maxScaleLog = Math.log(11); // log(10 + 1)
+    
+    // Inverse relationship: higher scale = smaller radius
+    const scaleFactor = 1 - (scaleLog / maxScaleLog) * 0.6; // 0.6 controls how much scaling affects size
+    let radius = Math.max(minRadius, Math.min(maxRadius, baseRadius * scaleFactor));
+    
+    // Dynamic scaling based on vertex properties
+    
+    // Weight-based scaling: 1.0 to 1.1 based on weight (exponentially approaching 1.1)
+    const weight = vertex.weight || 1;
+    const weightScale = 1 + 0.15 * (1 - Math.exp(-(weight - 1) * 0.5));
+    
+    // Unit-based scaling: 1.0 to 1.25 based on units (exponentially approaching 1.25)
+    let unitScale = 1.0;
+    if (vertex.controller && vertex.units > 0) {
+        unitScale = 1 + 0.15 * (1 - Math.exp(-(vertex.units - 1) * 0.1));
     }
+    
+    // Apply the dynamic scaling
+    radius *= weightScale * unitScale;
+    
+    // Ensure we still respect the min/max bounds after scaling
+    radius = Math.max(minRadius, Math.min(maxRadius, radius));
+
+if (vertex.sizeMultiplier) {
+    radius = radius * vertex.sizeMultiplier;
+}
+    
+    // Determine vertex color
+    let fillColor = 'rgba(147, 161, 161, 1.0)'; // Fully opaque neutral vertex color
+    
+    if (vertex.controllerTransition !== undefined) {
+        // Animate color transition
+        const oldColor = vertex.controller ? this.playerColors[vertex.controller] : 'rgba(147, 161, 161, 1.0)';
+        const newColor = vertex.newController ? this.playerColors[vertex.newController] : 'rgba(147, 161, 161, 1.0)';
+        fillColor = this.interpolateColor(oldColor, newColor, vertex.controllerTransition);
+    } else if (vertex.controller) {
+        fillColor = this.playerColors[vertex.controller] || '#93a1a1';
+    }
+    
+    // Draw vertex circle (no stroke)
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, 2 * Math.PI);
+    ctx.fillStyle = fillColor;
+    ctx.fill();
+    
+    // Draw unit count with adaptive font size
+    ctx.fillStyle = '#fdf6e3'; /* Solarized light base3 for high contrast */
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    // Scale font size with radius
+    const baseFontSize = vertex.controller ? 14 : 10;
+    const fontSize = Math.max(8, baseFontSize * (radius / baseRadius));
+
+    if (vertex.controller) {
+      ctx.font = `bold ${fontSize}px sans-serif`;
+      ctx.fillText(vertex.units.toString(), x, y);
+    } else {
+      ctx.font = `bold ${fontSize}px sans-serif`;
+      ctx.fillText(vertex.weight.toString(), x, y);
+    }
+}
 
     renderMovingUnits() {
         const ctx = this.ctx;
@@ -1078,11 +1218,6 @@ export class GameViewer {
                 // New player joined
                 this.addLogEntry(`${player.id} joined the game (${player.total_units} units)`, 'game-event');
             } else {
-                // Check for status changes
-                if (prevPlayer.status === 'active' && player.status === 'eliminated') {
-                    this.addLogEntry(`${player.id} has been eliminated!`, 'elimination');
-                }
-                
                 // Check for significant unit count changes (threshold of 5+ units)
                 const unitDiff = player.total_units - prevPlayer.total_units;
                 if (Math.abs(unitDiff) >= 5) {
@@ -1103,68 +1238,106 @@ export class GameViewer {
         });
     }
 
-    updatePlayers(players) {
-        const playerList = document.getElementById('playerList');
-        
-        // Check for player status changes before updating UI
-        this.logPlayerStatusChanges(players);
-        
-        playerList.innerHTML = '';
-        
-        // Order players: active (by units desc), then eliminated (by elimination order)
-        const sortedPlayers = [...players].sort((a, b) => {
-            // Active players first, sorted by unit count descending
-            if (a.status === 'active' && b.status !== 'active') return -1;
-            if (b.status === 'active' && a.status !== 'active') return 1;
-            if (a.status === 'active' && b.status === 'active') {
-                return b.total_units - a.total_units;
-            }
-            // For eliminated players, maintain original order
-            return 0;
+updatePlayers(players) {
+    const playerList = document.getElementById('playerList');
+    
+    // Check for player status changes before updating UI
+    this.logPlayerStatusChanges(players);
+    
+    playerList.innerHTML = '';
+    
+    // Use final_rankings from server if available, otherwise fall back to unit count
+    let sortedPlayers;
+    if (this.gameState && this.gameState.final_rankings && this.gameState.final_rankings.length > 0) {
+        // Use server's final rankings order
+        const rankingsMap = new Map();
+        this.gameState.final_rankings.forEach((playerId, index) => {
+            rankingsMap.set(playerId, index);
         });
         
-        sortedPlayers.forEach((player, index) => {
-            // Assign color if not already assigned
-            if (!this.playerColors[player.id]) {
-                this.playerColors[player.id] = this.colorPalette[this.colorIndex % this.colorPalette.length];
-                this.colorIndex++;
+        sortedPlayers = [...players].sort((a, b) => {
+            const rankA = rankingsMap.get(a.id);
+            const rankB = rankingsMap.get(b.id);
+            
+            // If both players are in rankings, sort by ranking
+            if (rankA !== undefined && rankB !== undefined) {
+                return rankA - rankB;
             }
-            
-            const playerCard = document.createElement('div');
-            let cardClass = `player-card ${player.status}`;
-            
-            // Add winner styling for first active player if game is ended
-            if (this.gameState && this.gameState.game_status === 'ended' && 
-                player.status === 'active' && index === 0) {
-                cardClass += ' winner';
-            }
-            
-            playerCard.className = cardClass;
-            playerCard.style.borderLeftColor = this.playerColors[player.id];
-            
-            // Add rank indicator for game end
-            let rankText = '';
-            if (this.gameState && this.gameState.game_status === 'ended') {
-                if (player.status === 'active' && index === 0) {
-                    rankText = '🏆 Winner: ';
-                } else {
-                    rankText = `#${index + 1}: `;
-                }
-            }
-            
-            playerCard.innerHTML = `
-                <div class="player-name" style="color: ${this.playerColors[player.id]}">
-                    ${rankText}${player.id}
-                </div>
-                <div class="player-stats">
-                    <span>Units: ${player.total_units}</span>
-                    <span class="player-status ${player.status}">${player.status}</span>
-                </div>
-            `;
-            
-            playerList.appendChild(playerCard);
+            // If only one is in rankings, that one comes first
+            if (rankA !== undefined) return -1;
+            if (rankB !== undefined) return 1;
+            // If neither is in rankings, sort by units
+            return b.total_units - a.total_units;
         });
+    } else {
+        // Fall back to sorting by total units (descending)
+        sortedPlayers = [...players].sort((a, b) => b.total_units - a.total_units);
     }
+    
+    const gameEnded = this.gameState && this.gameState.game_status === 'ended';
+    
+    sortedPlayers.forEach((player, index) => {
+        // Assign color if not already assigned
+        if (!this.playerColors[player.id]) {
+            this.playerColors[player.id] = this.colorPalette[this.colorIndex % this.colorPalette.length];
+            this.colorIndex++;
+        }
+        
+        const playerCard = document.createElement('div');
+        let cardClass = `player-card ${player.status}`;
+        
+        // Add winner styling for game end
+        if (gameEnded) {
+            if (index === 0) {
+                cardClass += ' winner';
+            } else if (index === 1) {
+                cardClass += ' second';
+            } else if (index === 2) {
+                cardClass += ' third';
+            }
+        }
+        
+        playerCard.className = cardClass;
+        playerCard.style.borderLeftColor = this.playerColors[player.id];
+        
+        // Determine rank text and emoji
+        let rankText = '';
+        let statusEmoji = '';
+        
+        if (gameEnded) {
+            // Game ended - show final rankings with medals
+            if (index === 0) {
+                rankText = '🏆 ';
+            } else if (index === 1) {
+                rankText = '🥈 ';
+            } else if (index === 2) {
+                rankText = '🥉 ';
+            } else {
+                rankText = `#${index + 1} `;
+            }
+        } else {
+            // Game in progress - show current ranking
+            rankText = `#${index + 1} `;
+            
+            // Add skull emoji for players with 0 units
+            if (player.total_units === 0) {
+                statusEmoji = ' 💀';
+            }
+        }
+        
+        playerCard.innerHTML = `
+            <div class="player-name" style="color: ${this.playerColors[player.id]}">
+                ${rankText}${player.id}${statusEmoji}
+            </div>
+            <div class="player-stats">
+                <span>Units: ${player.total_units}</span>
+                <span class="player-status ${player.status}">${player.status}</span>
+            </div>
+        `;
+        
+        playerList.appendChild(playerCard);
+    });
+}
 
     renderGraph(graph) {
         // This method is now handled by renderFrame()

@@ -544,10 +544,6 @@ class Player:
         """
         controlled_vertices = graph.get_vertices_controlled_by_player(self.id)
         self.total_units = sum(vertex.units for vertex in controlled_vertices)
-        
-        # Update status based on unit count
-        if self.total_units == 0 and len(controlled_vertices) == 0:
-            self.status = PlayerStatus.ELIMINATED
     
     def to_dict(self) -> Dict:
         """
@@ -1148,7 +1144,6 @@ class GameEngine:
                 # Check if player should be eliminated
                 controlled_vertices = self.game_state.graph.get_vertices_controlled_by_player(player.id)
                 if len(controlled_vertices) == 0 or player.total_units == 0:
-                    player.status = PlayerStatus.ELIMINATED
                     eliminated_players.append(player.id)
         
         # Record elimination order if any players were eliminated
@@ -1189,8 +1184,7 @@ class GameEngine:
         self.generate_units()
         
         # Phase 3: Check eliminations
-        eliminated = self.check_eliminations()
-        turn_results["eliminations"] = eliminated
+        turn_results["eliminations"] = self.check_eliminations()
         
         # Phase 4: Check if game is over
         if self.is_game_over():

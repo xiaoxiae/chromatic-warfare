@@ -123,12 +123,9 @@ class HardBot(GameBot):
         return commands
 
 
-def main():
-    game_id = sys.argv[1] if len(sys.argv) > 1 else None
-    
-    bot = HardBot(game_id, request_bots=(1, "easy"))
-    bot.run()
-
-
 if __name__ == "__main__":
-    main()
+    game_id = sys.argv[1] if len(sys.argv) > 1 else None
+    player_id = sys.argv[2] if len(sys.argv) > 2 else None
+
+    bot = HardBot(game_id, player_id)
+    bot.run()
