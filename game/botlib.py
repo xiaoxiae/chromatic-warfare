@@ -35,6 +35,8 @@ from typing import List, Dict, Optional, Tuple, Any, Callable
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 
+from config import BotConfig
+
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -277,7 +279,7 @@ class GameBot(ABC):
             logger.error(f"[{self.player_id}] Cannot request bots: not connected")
             return False
         
-        if difficulty not in ["easy", "medium", "hard"]:
+        if difficulty not in BotConfig.DIFFICULTIES:
             logger.error(f"[{self.player_id}] Invalid difficulty: {difficulty}")
             return False
         

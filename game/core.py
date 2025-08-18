@@ -12,6 +12,8 @@ from enum import Enum
 import random
 from collections import defaultdict
 
+from config import MapConfig
+
 
 class PlayerStatus(Enum):
     """Enumeration for player status states."""
@@ -244,19 +246,21 @@ class Graph:
             ValueError: If dimensions are not positive, weight range is invalid, or 
                        remove probability is not between 0 and 1
         """
-        if width <= 0 or height <= 0:
-            raise ValueError("Grid dimensions must be positive")
+        if not (MapConfig.MIN_WIDTH <= width <= MapConfig.MAX_WIDTH):
+            raise ValueError(f"Grid width must be between {MapConfig.MIN_WIDTH} and {MapConfig.MAX_WIDTH}")
+        if not (MapConfig.MIN_HEIGHT <= height <= MapConfig.MAX_HEIGHT):
+            raise ValueError(f"Grid height must be between {MapConfig.MIN_HEIGHT} and {MapConfig.MAX_HEIGHT}")
         
         if vertex_weight_range is not None:
             min_weight, max_weight = vertex_weight_range
-            if min_weight > max_weight:
-                raise ValueError("Minimum weight cannot be greater than maximum weight")
-            if min_weight < 1:
-                raise ValueError("Vertex weights must be positive integers")
+            if not (MapConfig.MIN_VERTEX_WEIGHT <= min_weight <= MapConfig.MAX_VERTEX_WEIGHT):
+                raise ValueError(f"Minimum weight must be between {MapConfig.MIN_VERTEX_WEIGHT} and {MapConfig.MAX_VERTEX_WEIGHT}")
+            if not (MapConfig.MIN_VERTEX_WEIGHT <= max_weight <= MapConfig.MAX_VERTEX_WEIGHT):
+                raise ValueError(f"Maximum weight must be between {MapConfig.MIN_VERTEX_WEIGHT} and {MapConfig.MAX_VERTEX_WEIGHT}")
         
         if vertex_remove_probability is not None:
-            if not 0 <= vertex_remove_probability <= 1:
-                raise ValueError("Vertex remove probability must be between 0 and 1")
+            if not (MapConfig.MIN_REMOVE_PROBABILITY <= vertex_remove_probability <= MapConfig.MAX_REMOVE_PROBABILITY):
+                raise ValueError(f"Vertex remove probability must be between {MapConfig.MIN_REMOVE_PROBABILITY} and {MapConfig.MAX_REMOVE_PROBABILITY}")
         
         # Clear existing graph
         self.vertices.clear()
@@ -409,19 +413,21 @@ class Graph:
             ValueError: If dimensions are not positive, weight range is invalid, or 
                        remove probability is not between 0 and 1
         """
-        if width <= 0 or height <= 0:
-            raise ValueError("Grid dimensions must be positive")
+        if not (MapConfig.MIN_WIDTH <= width <= MapConfig.MAX_WIDTH):
+            raise ValueError(f"Grid width must be between {MapConfig.MIN_WIDTH} and {MapConfig.MAX_WIDTH}")
+        if not (MapConfig.MIN_HEIGHT <= height <= MapConfig.MAX_HEIGHT):
+            raise ValueError(f"Grid height must be between {MapConfig.MIN_HEIGHT} and {MapConfig.MAX_HEIGHT}")
         
         if vertex_weight_range is not None:
             min_weight, max_weight = vertex_weight_range
-            if min_weight > max_weight:
-                raise ValueError("Minimum weight cannot be greater than maximum weight")
-            if min_weight < 1:
-                raise ValueError("Vertex weights must be positive integers")
+            if not (MapConfig.MIN_VERTEX_WEIGHT <= min_weight <= MapConfig.MAX_VERTEX_WEIGHT):
+                raise ValueError(f"Minimum weight must be between {MapConfig.MIN_VERTEX_WEIGHT} and {MapConfig.MAX_VERTEX_WEIGHT}")
+            if not (MapConfig.MIN_VERTEX_WEIGHT <= max_weight <= MapConfig.MAX_VERTEX_WEIGHT):
+                raise ValueError(f"Maximum weight must be between {MapConfig.MIN_VERTEX_WEIGHT} and {MapConfig.MAX_VERTEX_WEIGHT}")
         
         if vertex_remove_probability is not None:
-            if not 0 <= vertex_remove_probability <= 1:
-                raise ValueError("Vertex remove probability must be between 0 and 1")
+            if not (MapConfig.MIN_REMOVE_PROBABILITY <= vertex_remove_probability <= MapConfig.MAX_REMOVE_PROBABILITY):
+                raise ValueError(f"Vertex remove probability must be between {MapConfig.MIN_REMOVE_PROBABILITY} and {MapConfig.MAX_REMOVE_PROBABILITY}")
         
         # Clear existing graph
         self.vertices.clear()

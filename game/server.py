@@ -16,6 +16,8 @@ from typing import Dict, Set, Optional, Any, List, Tuple
 from websockets.server import WebSocketServerProtocol
 from core import GameState, GameEngine, Command, PlayerStatus
 
+from config import ServerConfig, GameDefaults, BotConfig, MapConfig
+
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -75,23 +77,30 @@ class GameInstance:
     No direct WebSocket handling - all communication goes through GameServer.
     """
     
-    def __init__(self, game_id: str, grid_width: int = 5, grid_height: int = 5, 
-                 max_turns: int = 10, starting_units: int = 5, map_type: str = "grid",
+    def __init__(self, game_id: str, grid_width: int = None, grid_height: int = None, 
+                 max_turns: int = None, starting_units: int = None, map_type: str = None,
                  vertex_weight_range: Tuple[int, int] = None, 
                  vertex_remove_probability: float = None,
                  maze_width: int = None, maze_height: int = None,
                  server_callback=None):
         """Initialize the game instance."""
         self.game_id = game_id
-        self.grid_width = grid_width
-        self.grid_height = grid_height
-        self.max_turns = max_turns
-        self.starting_units = starting_units
-        self.map_type = map_type
-        self.vertex_weight_range = vertex_weight_range
-        self.vertex_remove_probability = vertex_remove_probability
-        self.maze_width = maze_width or grid_width
-        self.maze_height = maze_height or grid_height
+        self.grid_width = grid_width or GameDefaults.GRID_WIDTH
+        self.grid_height = grid_height or GameDefaults.GRID_HEIGHT
+        self.max_turns = max_turns or GameDefaults.MAX_TURNS
+        self.starting_units = starting_units or GameDefaults.STARTING_UNITS
+        self.map_type = map_type or GameDefaults.MAP_TYPE
+        self.vertex_weight_range = vertex_weight_range or GameDefaults.VERTEX_WEIGHT_RANGE
+        self.vertex_remove_probability = vertex_remove_probability or GameDefaults.VERTEX_REMOVE_PROBABILITY
+        self.maze_width = maze_width or self.grid_width
+        self.maze_height = maze_height or self.grid_height
+        
+        # Grace period management
+        self.grace_period_seconds = GameDefaults.GRACE_PERIOD
+        self.minimum_players = GameDefaults.MINIMUM_PLAYERS
+        
+        # Turn management
+        self.turn_duration_seconds = GameDefaults.TURN_DURATION
         
         # Server callback for broadcasting messages
         self.server_callback = server_callback
@@ -107,14 +116,11 @@ class GameInstance:
         self.game_started = False
         
         # Grace period management
-        self.grace_period_seconds = 15
-        self.minimum_players = 2
         self.grace_period_task: Optional[asyncio.Task] = None
         
         # Turn management
         self.turn_commands: Dict[str, List[Command]] = {}  # player_id -> list of commands
         self.turn_timeout_seconds = 30
-        self.turn_duration_seconds = 1.0  # Duration of each turn for consistent viewing
         self.turn_timer_task: Optional[asyncio.Task] = None
         
         # Game control
@@ -164,7 +170,7 @@ class GameInstance:
                 logger.warning(f"Game {self.game_id}: Cannot spawn bots - game already started")
                 return False
             
-            if difficulty not in ["easy", "medium", "hard"]:
+            if difficulty not in BotConfig.DIFFICULTIES:
                 logger.warning(f"Game {self.game_id}: Invalid difficulty requested: {difficulty}")
                 return False
             
@@ -172,18 +178,17 @@ class GameInstance:
             
             # Import the appropriate bot class
             try:
+                bot_prefix = BotConfig.BOT_NAME_PREFIX[difficulty]
+
                 if difficulty == "easy":
                     from bot.easy import EasyBot
                     bot_class = EasyBot
-                    bot_prefix = "EasyBot"
                 elif difficulty == "medium":
                     from bot.medium import MediumBot
                     bot_class = MediumBot
-                    bot_prefix = "MediumBot"
                 elif difficulty == "hard":
                     from bot.hard import HardBot
                     bot_class = HardBot
-                    bot_prefix = "HardBot"
             except ImportError as e:
                 logger.error(f"Game {self.game_id}: Failed to import {difficulty} bot: {e}")
                 return False
@@ -240,7 +245,8 @@ class GameInstance:
             
             if (not self.game_started and 
                 len(self.bot_players) >= self.minimum_players and
-                len(self.spawned_bots) > 0):
+                len(self.spawned_bots) > 0 and
+                BotConfig.AUTO_START_WITH_BOTS):
                 
                 logger.info(f"Game {self.game_id}: Auto-starting with {len(self.bot_players)} players (including bots)")
                 
@@ -769,25 +775,24 @@ class GameServer:
     Multi-game WebSocket server that manages multiple GameInstance objects.
     Handles all WebSocket communication and routes messages to appropriate games.
     """
-    
-    def __init__(self, default_grid_width: int = 5, default_grid_height: int = 5, 
-                 default_max_turns: int = 10, default_starting_units: int = 5,
-                 default_turn_duration: float = 1.0):
+    def __init__(self, default_grid_width: int = None, default_grid_height: int = None, 
+                 default_max_turns: int = None, default_starting_units: int = None,
+                 default_turn_duration: float = None):
         """Initialize the multi-game server."""
         self.games: Dict[str, GameInstance] = {}
+        
+        # Default settings for new games (use config values as fallbacks)
+        self.default_grid_width = default_grid_width or GameDefaults.GRID_WIDTH
+        self.default_grid_height = default_grid_height or GameDefaults.GRID_HEIGHT
+        self.default_max_turns = default_max_turns or GameDefaults.MAX_TURNS
+        self.default_starting_units = default_starting_units or GameDefaults.STARTING_UNITS
+        self.default_turn_duration = default_turn_duration or GameDefaults.TURN_DURATION
         
         # Connection tracking
         self.bot_connections: Dict[str, Dict[str, WebSocketServerProtocol]] = {}  # game_id -> {player_id -> websocket}
         self.viewer_connections: Dict[str, Set[WebSocketServerProtocol]] = {}  # game_id -> set of websockets
         self.connection_to_game: Dict[WebSocketServerProtocol, str] = {}  # websocket -> game_id
         self.connection_to_player: Dict[WebSocketServerProtocol, str] = {}  # websocket -> player_id (for bots only)
-        
-        # Default settings for new games
-        self.default_grid_width = default_grid_width
-        self.default_grid_height = default_grid_height
-        self.default_max_turns = default_max_turns
-        self.default_starting_units = default_starting_units
-        self.default_turn_duration = default_turn_duration
         
         # Server control
         self.shutdown_requested = False
@@ -1053,14 +1058,14 @@ class GameServer:
             return
         
         num_bots = data.get("num_bots", 1)
-        difficulty = data.get("difficulty", "easy")
+        difficulty = data.get("difficulty", BotConfig.DIFFICULTIES[0])
         
         if not isinstance(num_bots, int) or num_bots < 1:
             await ConnectionUtils.send_error(websocket, "num_bots must be a positive integer")
             return
-        
-        if difficulty not in ["easy", "medium", "hard"]:
-            await ConnectionUtils.send_error(websocket, "difficulty must be 'easy', 'medium', or 'hard'")
+
+        if difficulty not in BotConfig.DIFFICULTIES:
+            await ConnectionUtils.send_error(websocket, f"difficulty must be one of: {', '.join(BotConfig.DIFFICULTIES)}")
             return
         
         success = await game.spawn_bots(num_bots, difficulty, player_id)
@@ -1155,6 +1160,11 @@ class GameServer:
                 if not isinstance(max_turns, int) or max_turns < 1:
                     await ConnectionUtils.send_error(websocket, "max_turns must be a positive integer")
                     return
+
+                # Add reasonable upper limit
+                if max_turns > 1000:  # or use a config value
+                    await ConnectionUtils.send_error(websocket, "max_turns cannot exceed 1000")
+                    return
                 
                 if game.game_started:
                     await ConnectionUtils.send_error(websocket, f"Cannot change max turns - game {game_id} has already started")
@@ -1215,30 +1225,41 @@ class GameServer:
                         try:
                             if key == "weight_min":
                                 min_val = int(value)
+
+                                if not (MapConfig.MIN_VERTEX_WEIGHT <= min_val <= MapConfig.MAX_VERTEX_WEIGHT):
+                                    await ConnectionUtils.send_error(websocket, f"Weight minimum must be between {MapConfig.MIN_VERTEX_WEIGHT} and {MapConfig.MAX_VERTEX_WEIGHT}")
+                                    return
+
                                 if vertex_weight_range:
                                     vertex_weight_range = (min_val, vertex_weight_range[1])
                                 else:
                                     vertex_weight_range = (min_val, min_val + 5)
                             elif key == "weight_max":
                                 max_val = int(value)
+
+                                if not (MapConfig.MIN_VERTEX_WEIGHT <= max_val <= MapConfig.MAX_VERTEX_WEIGHT):
+                                    await ConnectionUtils.send_error(websocket, f"Weight maximum must be between {MapConfig.MIN_VERTEX_WEIGHT} and {MapConfig.MAX_VERTEX_WEIGHT}")
+                                    return
+
                                 if vertex_weight_range:
                                     vertex_weight_range = (vertex_weight_range[0], max_val)
                                 else:
                                     vertex_weight_range = (1, max_val)
                             elif key == "remove_prob":
                                 vertex_remove_probability = float(value)
-                                if not (0.0 <= vertex_remove_probability <= 1.0):
-                                    await ConnectionUtils.send_error(websocket, "Remove probability must be between 0.0 and 1.0")
+
+                                if not (MapConfig.MIN_REMOVE_PROBABILITY <= vertex_remove_probability <= MapConfig.MAX_REMOVE_PROBABILITY):
+                                    await ConnectionUtils.send_error(websocket, f"Remove probability must be between {MapConfig.MIN_REMOVE_PROBABILITY} and {MapConfig.MAX_REMOVE_PROBABILITY}")
                                     return
                             elif key == "maze_width":
                                 maze_width = int(value)
-                                if maze_width < 1:
-                                    await ConnectionUtils.send_error(websocket, "Maze width must be at least 1")
+                                if not (MapConfig.MIN_WIDTH <= maze_width <= MapConfig.MAX_WIDTH):
+                                    await ConnectionUtils.send_error(websocket, f"Maze width must be between {MapConfig.MIN_WIDTH} and {MapConfig.MAX_WIDTH}")
                                     return
                             elif key == "maze_height":
                                 maze_height = int(value)
-                                if maze_height < 1:
-                                    await ConnectionUtils.send_error(websocket, "Maze height must be at least 1")
+                                if not (MapConfig.MIN_HEIGHT <= maze_height <= MapConfig.MAX_HEIGHT):
+                                    await ConnectionUtils.send_error(websocket, f"Maze height must be between {MapConfig.MIN_HEIGHT} and {MapConfig.MAX_HEIGHT}")
                                     return
                         except ValueError:
                             await ConnectionUtils.send_error(websocket, f"Invalid option value: {key}={value}")
@@ -1777,10 +1798,17 @@ async def keyboard_input_handler(server: GameServer) -> None:
         logger.info("Keyboard command handler shutting down")
 
 
-async def run_server(host: str = "localhost", port: int = 8765, 
-                    grid_width: int = 5, grid_height: int = 5, 
-                    turn_duration: float = 1.0) -> None:
+async def run_server(host: str = None, port: int = None, 
+                    grid_width: int = None, grid_height: int = None, 
+                    turn_duration: float = None) -> None:
     """Run the multi-game server with keyboard command support."""
+    # Use config defaults if not provided
+    host = host or ServerConfig.HOST
+    port = port or ServerConfig.PORT
+    grid_width = grid_width or GameDefaults.GRID_WIDTH
+    grid_height = grid_height or GameDefaults.GRID_HEIGHT
+    turn_duration = turn_duration or GameDefaults.TURN_DURATION
+    
     server = GameServer(default_grid_width=grid_width, default_grid_height=grid_height, 
                        default_turn_duration=turn_duration)
     
