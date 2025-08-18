@@ -213,12 +213,9 @@ class Game:
     
     def get_frontline_vertices(self) -> List[Vertex]:
         """Get vertices that have enemy or neutral neighbors."""
-        if not self.game:
-            return []
-        
         frontline = []
-        for vertex in self.game.my_vertices:
-            neighbors = self.game.get_neighbors(vertex.id)
+        for vertex in self.my_vertices:
+            neighbors = self.get_neighbors(vertex.id)
             if any(not n.is_mine for n in neighbors):
                 frontline.append(vertex)
         
@@ -238,10 +235,7 @@ class Game:
         Returns:
             Number of steps to nearest frontline vertex, or -1 if invalid
         """
-        if not self.game:
-            return -1
-        
-        vertex = self.game.get_vertex(vertex_id)
+        vertex = self.get_vertex(vertex_id)
         if not vertex or not vertex.is_mine:
             return -1
         
@@ -267,7 +261,7 @@ class Game:
             current_id, distance = queue.popleft()
             
             # Check all neighbors
-            for neighbor in self.game.get_neighbors(current_id):
+            for neighbor in self.get_neighbors(current_id):
                 if neighbor.id in visited:
                     continue
                 
@@ -309,8 +303,7 @@ class GameBot(ABC):
     and provides a clean interface for bot implementation.
     """
     
-    def __init__(self, game_id: str = None, player_id: Optional[str] = None, server_url: str = "ws://localhost:8765",
-                 request_bots: Optional[Tuple[int, str]] = None):
+    def __init__(self, game_id: str = None, player_id: Optional[str] = None, server_url: str = "ws://localhost:8765"):
         """
         Initialize the bot.
         
@@ -318,7 +311,6 @@ class GameBot(ABC):
             player_id: Unique identifier for this bot
             game_id: ID of the game to join (if None, will join "default" game)
             server_url: WebSocket URL of the game server
-            request_bots: Tuple of (num_bots, difficulty) to request when connecting
         """
         if not player_id:
             random_string = ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
@@ -330,7 +322,8 @@ class GameBot(ABC):
         self.websocket = None
         self.game = None
         self.running = False
-        self.request_bots_config = request_bots
+
+        self.bot_config = None
         
         # Callbacks
         self.on_connection_confirmed: Optional[Callable[[Dict], None]] = None
@@ -340,7 +333,7 @@ class GameBot(ABC):
         
         logger.info(f"Bot {self.player_id} initialized for game {self.game_id}")
 
-    async def request_bots(self, num_bots: int = 1, difficulty: str = "easy") -> bool:
+    async def _request_bots(self, num_bots: int = 1, difficulty: str = "easy") -> bool:
         """
         Request the server to add bots to the current game.
         
@@ -373,13 +366,13 @@ class GameBot(ABC):
             logger.error(f"[{self.player_id}] Failed to request bots: {e}")
             return False
     
-    def request_bots_sync(self, num_bots: int = 1, difficulty: str = "easy") -> None:
+    def request_bots(self, num_bots: int = 1, difficulty: str = "easy") -> None:
         """
         Synchronous wrapper for requesting bots.
         Can be called from play_turn or other sync methods.
         """
         if self.websocket:
-            asyncio.create_task(self.request_bots(num_bots, difficulty))
+            asyncio.create_task(self._request_bots(num_bots, difficulty))
     
     @abstractmethod
     def play_turn(self, game: Game) -> List[Command]:
@@ -467,11 +460,6 @@ class GameBot(ABC):
             starting_vertex = message.get("starting_vertex")
             logger.info(f"[{self.player_id}] Connection confirmed for game {game_id}, assigned vertex {starting_vertex}")
             
-            # Request bots if configured to do so
-            if self.request_bots_config:
-                num_bots, difficulty = self.request_bots_config
-                await self.request_bots(num_bots, difficulty)
-            
             if self.on_connection_confirmed:
                 self.on_connection_confirmed(message)
                 
@@ -552,15 +540,11 @@ class GameBot(ABC):
         finally:
             self.running = False
     
-    def run(self, request_bots: Optional[Tuple[int, str]] = None) -> None:
+    def run(self, bots: List[Tuple[int, str]] = []) -> None:
         """
         Run the bot (blocking call).
-        
-        Args:
-            request_bots: Optional tuple of (num_bots, difficulty) to request AI opponents
         """
-        if request_bots:
-            self.request_bots_config = request_bots
+        self.bot_config = bots
         asyncio.run(self._run_async())
     
     async def _run_async(self) -> None:
@@ -571,6 +555,9 @@ class GameBot(ABC):
             # Connect to server
             if not await self.connect():
                 return
+
+            for number, difficulty in (self.bot_config or []):
+                await self._request_bots(number, difficulty)
             
             # Start game loop
             await self.game_loop()
