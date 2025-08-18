@@ -21,6 +21,12 @@ A web-based viewer for Chromatic Warfare.
    ```
    Output will be in the `dist/` directory
 
+4. **Deploy to production**:
+   ```bash
+   npm run deploy
+   ```
+   This builds the project and deploys it to the production server via rsync
+
 ## WebSocket Connection
 
 The viewer automatically connects to the appropriate WebSocket server based on the environment:

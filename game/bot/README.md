@@ -48,7 +48,7 @@ if __name__ == "__main__":
     game_id = sys.argv[1] if len(sys.argv) > 1 else None
     player_id = sys.argv[2] if len(sys.argv) > 2 else None
 
-    bot = EasyBot(game_id, player_id)
+    bot = EasyBot(game_id, player_id, server_url="wss://cw.slama.dev/api")
 
     bot.run()
 

@@ -1891,15 +1891,7 @@ async def run_server(host: str = None, port: int = None,
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "fast":
-        # Run server with fast turns for testing
-        try:
-            asyncio.run(run_server(turn_duration=0.5))
-        except KeyboardInterrupt:
-            logger.info("Fast server shutting down...")
-    else:
-        # Run server
-        try:
-            asyncio.run(run_server())
-        except KeyboardInterrupt:
-            logger.info("Server shutting down...")
+    try:
+        asyncio.run(run_server())
+    except KeyboardInterrupt:
+        logger.info("Server shutting down...")
