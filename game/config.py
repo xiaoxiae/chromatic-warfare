@@ -4,6 +4,8 @@ class ServerConfig:
     HOST = "localhost"
     PORT = 8765
 
+    GAME_LOG_PATH = "game_results.log"
+
 
 # ===== GAME DEFAULTS =====
 class GameDefaults:

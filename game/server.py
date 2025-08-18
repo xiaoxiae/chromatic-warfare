@@ -15,6 +15,7 @@ import random
 from typing import Dict, Set, Optional, Any, List, Tuple
 from websockets.server import WebSocketServerProtocol
 from core import GameState, GameEngine, Command, PlayerStatus
+from datetime import datetime
 
 from config import ServerConfig, GameDefaults, BotConfig, MapConfig
 
@@ -128,6 +129,26 @@ class GameInstance:
         self.spawned_bots: List[asyncio.Task] = []  # Track spawned bot tasks
         
         logger.info(f"Game instance {self.game_id} created with grid {grid_width}x{grid_height}")
+
+    # Add this method to the GameInstance class
+    async def log_game_completion(self) -> None:
+        """Log the completed game to the results file."""
+        try:
+            if not self.game_state or not self.game_state.final_rankings:
+                return
+            
+            # Format: YYYY-MM-DD HH:MM:SS [player1, player2, player3]
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            log_entry = f"{timestamp} {self.game_state.final_rankings}\n"
+            
+            # Append to log file
+            with open(ServerConfig.GAME_LOG_PATH, "a", encoding="utf-8") as f:
+                f.write(log_entry)
+            
+            logger.info(f"Game {self.game_id} logged: {rankings}")
+            
+        except Exception as e:
+            logger.error(f"Failed to log game {self.game_id}: {e}")
 
     async def broadcast_message(self, message: Dict[str, Any], to_bots: bool = True, to_viewers: bool = True) -> None:
         """Broadcast a message via the server callback."""
@@ -737,6 +758,8 @@ class GameInstance:
             
             if turn_result["game_over"]:
                 logger.info(f"Game {self.game_id}: Game over! Rankings: {self.game_state.final_rankings}")
+
+                await self.log_game_completion()
                 
                 # Mark game as ended
                 self.game_ended_time = time.time()
