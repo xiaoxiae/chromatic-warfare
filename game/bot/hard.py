@@ -3,8 +3,7 @@ import os
 import sys
 from typing import List
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from botlib import GameBot, Game, Command
+from bot.lib import GameBot, Game, Command
 
 
 class HardBot(GameBot):
@@ -128,4 +127,4 @@ if __name__ == "__main__":
     player_id = sys.argv[2] if len(sys.argv) > 2 else None
 
     bot = HardBot(game_id, player_id)
-    bot.run()
+    bot.run(bots=[(1, "easy"), (1, "medium"), (1, "hard")])

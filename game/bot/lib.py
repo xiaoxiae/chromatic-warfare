@@ -1,28 +1,5 @@
 """
-Bot Library for Turn-Based Strategy Game
-
-This library provides both high-level and low-level APIs for creating bots
-that play the turn-based strategy game. The main goal is to abstract away
-all the WebSocket handling, connection management, and game state parsing,
-allowing bot developers to focus on strategy.
-
-Usage:
-1. Inherit from GameBot
-2. Implement the play_turn() method
-3. Call bot.run() to start the bot
-
-Example:
-    class MyBot(GameBot):
-        def play_turn(self, game):
-            # Simple strategy: attack weakest neighbor
-            for vertex in self.my_vertices:
-                weak_enemy = self.find_weakest_enemy_neighbor(vertex)
-                if weak_enemy and vertex.units > weak_enemy.units + 1:
-                    return [self.attack(vertex, weak_enemy, vertex.units - 1)]
-            return []
-    
-    bot = MyBot("my_bot_id")
-    bot.run()
+Bot Library for Chromatic Warfare.
 """
 
 import asyncio
@@ -34,8 +11,6 @@ import string
 from typing import List, Dict, Optional, Tuple, Any, Callable
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
-
-from config import BotConfig
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -346,10 +321,6 @@ class GameBot(ABC):
         """
         if not self.websocket:
             logger.error(f"[{self.player_id}] Cannot request bots: not connected")
-            return False
-        
-        if difficulty not in BotConfig.DIFFICULTIES:
-            logger.error(f"[{self.player_id}] Invalid difficulty: {difficulty}")
             return False
         
         message = {

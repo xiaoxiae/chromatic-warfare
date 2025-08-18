@@ -1,4 +1,4 @@
-# Bot Library for Turn-Based Strategy Game
+# Bot Library for Chromatic Warfare
 
 This library provides a simple API for creating bots. Inherit from `GameBot`, implement `play_turn()`, and call `bot.run()`.
 
@@ -10,8 +10,7 @@ import os
 import sys
 from typing import List
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from botlib import GameBot, Game, Command
+from lib import GameBot, Game, Command
 
 
 class EasyBot(GameBot):

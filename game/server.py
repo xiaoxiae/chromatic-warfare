@@ -1,8 +1,5 @@
 """
-WebSocket Game Server for Turn-Based Strategy Game
-
-This module provides the WebSocket server infrastructure for hosting the turn-based
-strategy game, managing bot connections, viewer connections, and message routing.
+WebSocket Game Server for Chromatic Warfare.
 """
 
 import asyncio

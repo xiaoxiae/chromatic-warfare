@@ -3,8 +3,7 @@ import os
 import sys
 from typing import List
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from botlib import GameBot, Game, Command
+from bot.lib import GameBot, Game, Command
 
 
 class MediumBot(GameBot):
