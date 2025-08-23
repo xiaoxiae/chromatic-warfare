@@ -63,8 +63,8 @@
                         </div>
                     </div>
 
-                    <!-- Game ID and Join -->
-                    <div class="flex items-center justify-center gap-3">
+                    <!-- Game ID and Join (hidden in streamer mode) -->
+                    <div class="flex items-center justify-center gap-3" id="gameIdSection">
                         <label for="gameIdInput" class="text-sm text-solarized-base01 font-medium">Game ID:</label>
                         <div class="flex items-center gap-2">
                             <input 
@@ -117,7 +117,7 @@
                 </div>
             </div>
             
-            <div class="absolute top-48 left-0 right-0 bottom-0">
+            <div class="absolute top-64 left-0 right-0 bottom-0">
                 <canvas id="gameCanvas" class="w-full h-full block"></canvas>
             </div>
             
@@ -287,7 +287,8 @@
                 <h3 class="text-base font-medium mb-4 text-solarized-base01">Game Log</h3>
             </div>
             
-            <div class="flex-1 px-5 overflow-y-auto" id="gameLog">
+            <!-- Game Log (blurred in streamer mode) -->
+            <div class="flex-1 px-5 overflow-y-auto transition-all duration-300" id="gameLog">
                 <!-- Log entries will be populated here -->
             </div>
             
@@ -306,6 +307,32 @@
 
     <script type="module" src="./src/main.js"></script>
     <script>
+        // Check for streamer mode
+        const urlParams = new URLSearchParams(window.location.search);
+        const isStreamerMode = urlParams.get('streamer_mode') === 'true';
+        
+        // Apply streamer mode styling if enabled
+        if (isStreamerMode) {
+            // Hide the game ID section
+            const gameIdSection = document.getElementById('gameIdSection');
+            gameIdSection.style.display = 'none';
+            
+            // Blur the game log
+            const gameLog = document.getElementById('gameLog');
+            gameLog.classList.add('blur-sm', 'select-none');
+            gameLog.style.pointerEvents = 'none';
+            
+            // Add a subtle indicator that streamer mode is active (optional)
+            document.title = 'Chromatic Warfare (Streamer Mode)';
+            
+            // Add a small visual indicator in the header
+            const header = document.querySelector('.absolute.top-0.left-0.right-0');
+            const streamerIndicator = document.createElement('div');
+            streamerIndicator.className = 'absolute top-2 left-2 bg-solarized-red/20 text-solarized-red px-2 py-1 rounded text-xs font-medium border border-solarized-red/30';
+            streamerIndicator.textContent = 'STREAMER MODE';
+            header.appendChild(streamerIndicator);
+        }
+
         // Mobile menu functionality
         const menuToggle = document.getElementById('menuToggle');
         const sidebar = document.getElementById('sidebar');
@@ -335,41 +362,42 @@
             }
         });
 
-        // Game ID functionality
-        const gameIdInput = document.getElementById('gameIdInput');
-        const joinGameBtn = document.getElementById('joinGameBtn');
+        // Game ID functionality (only if not in streamer mode)
+        if (!isStreamerMode) {
+            const gameIdInput = document.getElementById('gameIdInput');
+            const joinGameBtn = document.getElementById('joinGameBtn');
 
-        // Set current game ID in input
-        const urlParams = new URLSearchParams(window.location.search);
-        const currentGameId = urlParams.get('game') || 'default';
-        gameIdInput.value = currentGameId;
+            // Set current game ID in input
+            const currentGameId = urlParams.get('game') || 'default';
+            gameIdInput.value = currentGameId;
 
-        function joinGame() {
-            const gameId = gameIdInput.value.trim();
-            if (!gameId) {
-                gameIdInput.focus();
-                return;
+            function joinGame() {
+                const gameId = gameIdInput.value.trim();
+                if (!gameId) {
+                    gameIdInput.focus();
+                    return;
+                }
+
+                // Update URL with new game ID
+                const newUrl = new URL(window.location);
+                newUrl.searchParams.set('game', gameId);
+                window.location.href = newUrl.toString();
             }
 
-            // Update URL with new game ID
-            const newUrl = new URL(window.location);
-            newUrl.searchParams.set('game', gameId);
-            window.location.href = newUrl.toString();
+            joinGameBtn.addEventListener('click', joinGame);
+
+            // Allow Enter key to join game
+            gameIdInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    joinGame();
+                }
+            });
+
+            // Focus input when clicked
+            gameIdInput.addEventListener('focus', () => {
+                gameIdInput.select();
+            });
         }
-
-        joinGameBtn.addEventListener('click', joinGame);
-
-        // Allow Enter key to join game
-        gameIdInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                joinGame();
-            }
-        });
-
-        // Focus input when clicked
-        gameIdInput.addEventListener('focus', () => {
-            gameIdInput.select();
-        });
 
         // Settings modal functionality
         const settingsBtn = document.getElementById('settingsBtn');
