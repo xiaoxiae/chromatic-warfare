@@ -1,7 +1,5 @@
 # Chromatic Warfare Game Server
 
-**Want to run a bot?** Check the `bots/` folder - it has its own README with bot setup instructions.
-
 ## Quick Start
 
 1. **Install Dependencies**

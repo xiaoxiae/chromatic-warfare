@@ -4,10 +4,15 @@ This library provides a simple API for creating bots. Inherit from `GameBot`, im
 
 ## Quick Start
 
+1. install requirements (`pip install -r requirements.txt`)
+2. pun this Python script, which implements a basic bot, to play a game against 3 other bots
+3. **improve** the bot and play against others (use game `default` to play the one at [https://cw.slama.dev/](https://cw.slama.dev/))!
 ```python
 #!/usr/bin/env python3
 import os
 import sys
+import random
+import string
 from typing import List
 
 from lib import GameBot, Game, Command
@@ -44,16 +49,23 @@ class EasyBot(GameBot):
         return commands
 
 
+def generate_game_id() -> str:
+    """Generate a random 8-character alphanumeric game ID."""
+    return ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+
+
 if __name__ == "__main__":
-    game_id = sys.argv[1] if len(sys.argv) > 1 else None
-    player_id = sys.argv[2] if len(sys.argv) > 2 else None
+    game_id = generate_game_id()
+    
+    player_name = input("Enter your player name: ")
+    
+    print(f"\nYou can view the game at: https://cw.slama.dev/?game={game_id}")
+    
+    input("\nFeel free to modify the in-browser settings to change map/rounds/time/etc.\nPressing enter starts the game.")
 
-    bot = EasyBot(game_id, player_id, server_url="wss://cw.slama.dev/api")
+    bot = EasyBot(game_id, player_name, server_url="wss://cw.slama.dev/api")
 
-    bot.run()
-
-    # alternatively, you can also request a game with bots
-    # bot.run(bots=[(1, "easy"), (1, "medium"), (1, "hard")])
+    bot.run(bots=[(1, "easy"), (1, "medium"), (1, "hard")])
 ```
 
 ## Movement Commands
