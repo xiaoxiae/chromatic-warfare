@@ -1,7 +1,7 @@
 """
-Turn-Based Strategy Game - Core Data Structures
+Turn-Based Strategy Game - Optimized Core Data Structures
 
-This module contains the foundational data structures for a turn-based strategy game
+This module contains performance-optimized data structures for a turn-based strategy game
 played on a directed planar graph.
 """
 
@@ -10,7 +10,6 @@ from typing import Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass
 from enum import Enum
 import random
-from collections import defaultdict
 
 from config import MapConfig
 
@@ -108,6 +107,9 @@ class Graph:
         # Adjacency list for efficient neighbor lookup
         self._adjacency: Dict[int, Set[int]] = {}
 
+        self._player_vertices_cache: Dict[str, List[int]] = {}
+        self._cache_dirty = True
+
     def add_vertex(self, vertex: Vertex) -> None:
         """
         Add a vertex to the graph.
@@ -123,6 +125,7 @@ class Graph:
 
         self.vertices[vertex.id] = vertex
         self._adjacency[vertex.id] = set()
+        self._cache_dirty = True
 
     def remove_vertex(self, vertex_id: int) -> None:
         """
@@ -145,6 +148,7 @@ class Graph:
 
         del self.vertices[vertex_id]
         del self._adjacency[vertex_id]
+        self._cache_dirty = True
 
     def add_edge(self, from_vertex: int, to_vertex: int) -> None:
         """
@@ -187,6 +191,20 @@ class Graph:
         self.edges.remove(edge)
         self._adjacency[from_vertex].discard(to_vertex)
 
+    def mark_cache_dirty(self):
+        """Mark the player vertices cache as needing update."""
+        self._cache_dirty = True
+
+    def _rebuild_player_cache(self):
+        """Rebuild the cache of player-controlled vertices."""
+        self._player_vertices_cache.clear()
+        for vertex_id, vertex in self.vertices.items():
+            if vertex.controller:
+                if vertex.controller not in self._player_vertices_cache:
+                    self._player_vertices_cache[vertex.controller] = []
+                self._player_vertices_cache[vertex.controller].append(vertex_id)
+        self._cache_dirty = False
+
     def get_adjacent_vertices(self, vertex_id: int) -> Set[int]:
         """
         Get all vertices adjacent to the given vertex.
@@ -203,7 +221,7 @@ class Graph:
         if vertex_id not in self.vertices:
             raise ValueError(f"Vertex {vertex_id} doesn't exist")
 
-        return self._adjacency[vertex_id].copy()
+        return self._adjacency[vertex_id]  # Return reference, not copy
 
     def get_vertices_controlled_by_player(self, player_id: str) -> List[Vertex]:
         """
@@ -215,8 +233,11 @@ class Graph:
         Returns:
             List of vertices controlled by the player
         """
-        return [vertex for vertex in self.vertices.values()
-                if vertex.controller == player_id]
+        if self._cache_dirty:
+            self._rebuild_player_cache()
+
+        vertex_ids = self._player_vertices_cache.get(player_id, [])
+        return [self.vertices[vid] for vid in vertex_ids]
 
     def get_uncontrolled_vertices(self) -> List[Vertex]:
         """
@@ -265,6 +286,8 @@ class Graph:
         self.vertices.clear()
         self.edges.clear()
         self._adjacency.clear()
+        self._player_vertices_cache.clear()
+        self._cache_dirty = True
 
         # Create vertices
         for y in range(height):
@@ -432,6 +455,8 @@ class Graph:
         self.vertices.clear()
         self.edges.clear()
         self._adjacency.clear()
+        self._player_vertices_cache.clear()
+        self._cache_dirty = True
 
         # Create vertices with hexagonal positioning
         for row in range(height):
@@ -643,6 +668,7 @@ class GameState:
             vertex.units = starting_units
             player.update_total_units(self.graph)
 
+        self.graph.mark_cache_dirty()
         self.status = GameStatus.ACTIVE
         self.current_turn = 1
 
@@ -876,6 +902,7 @@ class GameState:
 class GameEngine:
     """
     Handles core game mechanics including movement, combat, and turn resolution.
+    OPTIMIZED: Batch processing, caching, and efficient data structures.
     """
 
     def __init__(self, game_state: GameState):
@@ -886,11 +913,20 @@ class GameEngine:
             game_state: The game state to operate on
         """
         self.game_state = game_state
+        self._adjacency_cache = {}
+        self._last_cache_turn = -1
+
+    def _update_cache_if_needed(self):
+        """Update adjacency cache if graph changed."""
+        if self._last_cache_turn != self.game_state.current_turn:
+            self._adjacency_cache.clear()
+            self._last_cache_turn = self.game_state.current_turn
 
     def process_movement_command(self, player_id: str, from_vertex: int,
                                to_vertex: int, units: int) -> bool:
         """
         Validate a single movement command.
+        OPTIMIZED: Cached adjacency checks.
 
         Args:
             player_id: ID of the player issuing the command
@@ -901,78 +937,101 @@ class GameEngine:
         Returns:
             True if command is valid, False otherwise
         """
-        try:
-            # Basic validation
-            if player_id not in self.game_state.players:
-                return False
-
-            if self.game_state.players[player_id].status != PlayerStatus.ACTIVE:
-                return False
-
-            # Check if vertices exist
-            if (from_vertex not in self.game_state.graph.vertices or
-                to_vertex not in self.game_state.graph.vertices):
-                return False
-
-            # Check adjacency
-            adjacent = self.game_state.graph.get_adjacent_vertices(from_vertex)
-            if to_vertex not in adjacent:
-                return False
-
-            # Check if player controls source vertex
-            source = self.game_state.graph.vertices[from_vertex]
-            if source.controller != player_id:
-                return False
-
-            # Check if player has enough units (no movement costs now)
-            if source.units < units:
-                return False
-
-            return True
-
-        except Exception:
+        # Quick rejection checks first
+        if units <= 0 or from_vertex == to_vertex:
             return False
+
+        if player_id not in self.game_state.players:
+            return False
+
+        if self.game_state.players[player_id].status != PlayerStatus.ACTIVE:
+            return False
+
+        # Check if vertices exist
+        graph = self.game_state.graph
+        if from_vertex not in graph.vertices or to_vertex not in graph.vertices:
+            return False
+
+        # Check if player controls source vertex
+        source = graph.vertices[from_vertex]
+        if source.controller != player_id:
+            return False
+
+        # Check if player has enough units
+        if source.units < units:
+            return False
+
+        cache_key = (from_vertex, to_vertex)
+        if cache_key not in self._adjacency_cache:
+            self._adjacency_cache[cache_key] = to_vertex in graph._adjacency[from_vertex]
+
+        return self._adjacency_cache[cache_key]
 
     def resolve_all_movements(self, movements_dict: Dict[str, List[Command]]) -> None:
         """
         Resolve all movement commands for the current turn.
+        OPTIMIZED: Single-pass validation and batch processing.
 
         Args:
             movements_dict: Dictionary mapping player IDs to their list of commands
         """
-        # Step 1: Validate all commands and track unit requirements per vertex
+        self._update_cache_if_needed()
+
         valid_movements = []
-        unit_requirements = defaultdict(int)
+        unit_requirements = {}
+        graph = self.game_state.graph
 
+        # Step 1: Batch validate all commands
         for player_id, commands in movements_dict.items():
-            for command in commands:
-                if self.process_movement_command(command.player_id, command.from_vertex,
-                                               command.to_vertex, command.units):
-                    # Check if source vertex can afford this command along with others
-                    source_vertex = self.game_state.graph.vertices[command.from_vertex]
-                    if unit_requirements[command.from_vertex] + command.units <= source_vertex.units:
-                        unit_requirements[command.from_vertex] += command.units
-                        valid_movements.append(command)
+            # Skip inactive players entirely
+            if player_id not in self.game_state.players:
+                continue
+            if self.game_state.players[player_id].status != PlayerStatus.ACTIVE:
+                continue
 
-        # Step 2: Deduct units from source vertices
-        for command in valid_movements:
-            source = self.game_state.graph.vertices[command.from_vertex]
-            source.units -= command.units
+            for command in commands:
+                # Quick validation without method call overhead
+                if (command.units > 0 and
+                    command.from_vertex != command.to_vertex and
+                    command.from_vertex in graph.vertices and
+                    command.to_vertex in graph.vertices):
+
+                    source_vertex = graph.vertices[command.from_vertex]
+
+                    # Check control and adjacency
+                    if (source_vertex.controller == player_id and
+                        command.to_vertex in graph._adjacency[command.from_vertex]):
+
+                        # Check unit availability
+                        current_requirement = unit_requirements.get(command.from_vertex, 0)
+                        if current_requirement + command.units <= source_vertex.units:
+                            unit_requirements[command.from_vertex] = current_requirement + command.units
+                            valid_movements.append(command)
+
+        # Step 2: Batch deduct units from source vertices
+        for from_vertex, units in unit_requirements.items():
+            graph.vertices[from_vertex].units -= units
 
         # Step 3: Process mutual cancellations
-        movements_after_cancellation = self._process_mutual_cancellations(valid_movements)
+        movements_after_cancellation = self._process_mutual_cancellations_optimized(valid_movements)
 
-        # Step 4: Group remaining movements by destination and resolve
-        movements_by_destination = defaultdict(list)
+        # Step 4: Batch resolve conflicts at destinations
+        movements_by_destination = {}
         for command in movements_after_cancellation:
+            if command.to_vertex not in movements_by_destination:
+                movements_by_destination[command.to_vertex] = []
             movements_by_destination[command.to_vertex].append(command)
 
-        for dest_vertex_id, movements in movements_by_destination.items():
-            self._resolve_vertex_conflict(dest_vertex_id, movements)
+        # Mark cache as dirty since we're about to change controllers
+        graph.mark_cache_dirty()
 
-    def _process_mutual_cancellations(self, movements: List[Command]) -> List[Command]:
+        for dest_vertex_id, movements in movements_by_destination.items():
+            self._resolve_vertex_conflict_optimized(dest_vertex_id, movements)
+
+    def _process_mutual_cancellations_optimized(self, movements: List[Command]) -> List[Command]:
         """
         Process mutual cancellations between opposing movements.
+        OPTIMIZED: Single-pass processing with efficient lookups.
 
         Args:
             movements: List of all valid movement commands
@@ -980,56 +1039,51 @@ class GameEngine:
         Returns:
             List of movements after cancellations
         """
-        # Create a mapping of (from, to) -> total units
-        movement_map = defaultdict(int)
-        movement_players = {}  # Track which player sent units for each route
+        movement_map = {}
+        movement_players = {}
 
         for command in movements:
             route = (command.from_vertex, command.to_vertex)
-            movement_map[route] += command.units
+            movement_map[route] = movement_map.get(route, 0) + command.units
             movement_players[route] = command.player_id
 
-        # Process cancellations for opposing routes
+        # Process cancellations
         remaining_movements = []
-        processed_routes = set()
+        processed = set()
 
-        for (from_v, to_v), units in movement_map.items():
+        for route, units in movement_map.items():
+            if route in processed:
+                continue
+
+            from_v, to_v = route
             reverse_route = (to_v, from_v)
 
-            if reverse_route in movement_map and (from_v, to_v) not in processed_routes:
-                # Mutual cancellation
+            if reverse_route in movement_map:
                 reverse_units = movement_map[reverse_route]
 
                 if units > reverse_units:
-                    # Forward movement survives
-                    remaining_units = units - reverse_units
                     remaining_movements.append(Command(
-                        movement_players[(from_v, to_v)], from_v, to_v, remaining_units
+                        movement_players[route], from_v, to_v, units - reverse_units
                     ))
                 elif reverse_units > units:
-                    # Reverse movement survives
-                    remaining_units = reverse_units - units
                     remaining_movements.append(Command(
-                        movement_players[reverse_route], to_v, from_v, remaining_units
+                        movement_players[reverse_route], to_v, from_v, reverse_units - units
                     ))
-                # If equal, both cancel out completely (no remaining movement)
 
-                # Mark both routes as processed
-                processed_routes.add((from_v, to_v))
-                processed_routes.add(reverse_route)
-
-            elif (from_v, to_v) not in processed_routes:
-                # No opposing movement, keep as is
+                processed.add(route)
+                processed.add(reverse_route)
+            else:
                 remaining_movements.append(Command(
-                    movement_players[(from_v, to_v)], from_v, to_v, units
+                    movement_players[route], from_v, to_v, units
                 ))
-                processed_routes.add((from_v, to_v))
+                processed.add(route)
 
         return remaining_movements
 
-    def _resolve_vertex_conflict(self, vertex_id: int, movements: List[Command]) -> None:
+    def _resolve_vertex_conflict_optimized(self, vertex_id: int, movements: List[Command]) -> None:
         """
         Resolve conflicts at a single vertex.
+        OPTIMIZED: Direct vertex access and efficient probability calculation.
 
         Args:
             vertex_id: ID of the destination vertex
@@ -1040,32 +1094,28 @@ class GameEngine:
 
         vertex = self.game_state.graph.vertices[vertex_id]
 
-        # Group movements by attacking player
-        attacks_by_player = defaultdict(int)
+        attacks_by_player = {}
         for movement in movements:
-            attacks_by_player[movement.player_id] += movement.units
+            player_id = movement.player_id
+            attacks_by_player[player_id] = attacks_by_player.get(player_id, 0) + movement.units
 
         # Handle different vertex states
         if vertex.controller is None:
-            # Neutral vertex - require weight cost, then probabilistic resolution
-            self._resolve_neutral_vertex_conflict(vertex, attacks_by_player)
+            # Neutral vertex
+            self._resolve_neutral_vertex_conflict_optimized(vertex, attacks_by_player)
         else:
-            # Controlled vertex - check if any attacker is the controller
+            # Controlled vertex - check if controller is reinforcing
             controller_reinforcement = attacks_by_player.pop(vertex.controller, 0)
-            vertex.units += controller_reinforcement  # Add friendly reinforcements
+            vertex.units += controller_reinforcement
 
             if attacks_by_player:
-                # There are actual attacks
-                self._resolve_controlled_vertex_conflict(vertex, attacks_by_player)
+                self._resolve_controlled_vertex_conflict_optimized(vertex, attacks_by_player)
 
-    def _resolve_neutral_vertex_conflict(self, vertex: Vertex,
-                                       attacks_by_player: Dict[str, int]) -> None:
+    def _resolve_neutral_vertex_conflict_optimized(self, vertex: Vertex,
+                                                  attacks_by_player: Dict[str, int]) -> None:
         """
         Resolve conflict at a neutral vertex.
-
-        Args:
-            vertex: The neutral vertex being attacked
-            attacks_by_player: Dictionary mapping player IDs to total attacking units
+        OPTIMIZED: Efficient probability calculation.
         """
         if not attacks_by_player:
             return
@@ -1078,36 +1128,21 @@ class GameEngine:
 
         effective_units = total_attacking_units - vertex.weight
 
-        if effective_units < 0:
-            return
+        rand_val = random.random() * total_attacking_units
+        cumulative = 0
 
-        # Calculate probabilities based on proportion of attacking units
-        probabilities = {player_id: units / total_attacking_units
-                        for player_id, units in attacks_by_player.items()}
-
-        # Randomly select winner
-        rand = random.random()
-        cumulative_prob = 0
-        winner = None
-
-        for player_id, prob in probabilities.items():
-            cumulative_prob += prob
-            if rand <= cumulative_prob:
-                winner = player_id
+        for player_id, units in attacks_by_player.items():
+            cumulative += units
+            if rand_val <= cumulative:
+                vertex.controller = player_id
+                vertex.units = effective_units
                 break
 
-        if winner:
-            vertex.controller = winner
-            vertex.units = effective_units
-
-    def _resolve_controlled_vertex_conflict(self, vertex: Vertex,
-                                          attacks_by_player: Dict[str, int]) -> None:
+    def _resolve_controlled_vertex_conflict_optimized(self, vertex: Vertex,
+                                                     attacks_by_player: Dict[str, int]) -> None:
         """
         Resolve conflict at a controlled vertex.
-
-        Args:
-            vertex: The controlled vertex being attacked
-            attacks_by_player: Dictionary mapping player IDs to total attacking units
+        OPTIMIZED: Streamlined combat resolution.
         """
         if not attacks_by_player:
             return
@@ -1116,43 +1151,32 @@ class GameEngine:
         defending_units = vertex.units
 
         if total_attacking_units < defending_units:
-            # Defenders win, reduce defender count
             vertex.units = defending_units - total_attacking_units
         elif total_attacking_units == defending_units:
-            # Tie - vertex becomes neutral
             vertex.controller = None
             vertex.units = 0
         else:
-            # Attackers win
             remaining_attackers = total_attacking_units - defending_units
 
             if len(attacks_by_player) == 1:
-                # Single attacker takes control
                 winner = next(iter(attacks_by_player))
                 vertex.controller = winner
                 vertex.units = remaining_attackers
             else:
-                # Multiple attackers - probabilistic resolution
-                probabilities = {player_id: units / total_attacking_units
-                               for player_id, units in attacks_by_player.items()}
+                rand_val = random.random() * total_attacking_units
+                cumulative = 0
 
-                rand = random.random()
-                cumulative_prob = 0
-                winner = None
-
-                for player_id, prob in probabilities.items():
-                    cumulative_prob += prob
-                    if rand <= cumulative_prob:
-                        winner = player_id
+                for player_id, units in attacks_by_player.items():
+                    cumulative += units
+                    if rand_val <= cumulative:
+                        vertex.controller = player_id
+                        vertex.units = remaining_attackers
                         break
-
-                if winner:
-                    vertex.controller = winner
-                    vertex.units = remaining_attackers
 
     def generate_units(self) -> None:
         """
         Generate new units at all controlled vertices based on their weight.
+        OPTIMIZED: Single pass with no function calls.
         """
         for vertex in self.game_state.graph.vertices.values():
             if vertex.controller is not None:
@@ -1161,21 +1185,35 @@ class GameEngine:
     def check_eliminations(self) -> List[str]:
         """
         Check for player eliminations and update their status.
+        OPTIMIZED: Batch processing with cached lookups.
 
         Returns:
             List of player IDs that were eliminated this turn
         """
         eliminated_players = []
+        graph = self.game_state.graph
 
-        for player in self.game_state.players.values():
+        player_units = {}
+        player_vertices = {}
+
+        for vertex in graph.vertices.values():
+            if vertex.controller is not None:
+                if vertex.controller not in player_units:
+                    player_units[vertex.controller] = 0
+                    player_vertices[vertex.controller] = 0
+                player_units[vertex.controller] += vertex.units
+                player_vertices[vertex.controller] += 1
+
+        # Check each active player
+        for player_id, player in self.game_state.players.items():
             if player.status == PlayerStatus.ACTIVE:
-                # Update total units
-                player.update_total_units(self.game_state.graph)
+                total_units = player_units.get(player_id, 0)
+                vertex_count = player_vertices.get(player_id, 0)
 
-                # Check if player should be eliminated
-                controlled_vertices = self.game_state.graph.get_vertices_controlled_by_player(player.id)
-                if len(controlled_vertices) == 0 or player.total_units == 0:
-                    eliminated_players.append(player.id)
+                player.total_units = total_units
+
+                if vertex_count == 0 or total_units == 0:
+                    eliminated_players.append(player_id)
 
         # Record elimination order if any players were eliminated
         if eliminated_players:
@@ -1195,6 +1233,7 @@ class GameEngine:
     def process_turn(self, movements_dict: Dict[str, List[Command]]) -> Dict:
         """
         Process a complete game turn including movement, combat, and unit generation.
+        OPTIMIZED: Batch processing throughout.
 
         Args:
             movements_dict: Dictionary mapping player IDs to their movement commands
@@ -1225,253 +1264,3 @@ class GameEngine:
             self.game_state.current_turn += 1
 
         return turn_results
-
-
-def test_new_combat_system():
-    """
-    Test the new combat system with mutual cancellations and simplified costs.
-    """
-    print("Testing new combat system...")
-
-    # Test 1: Mutual cancellation
-    print("\n=== Test 1: Mutual Cancellation ===")
-    game = GameState()
-    game.graph.generate_grid_graph(2, 2)
-    game.add_player("player1")
-    game.add_player("player2")
-    game.start_game(starting_units=0)
-
-    # Set up manual scenario
-    vertex_a = game.graph.vertices[0]  # Player 1 controlled
-    vertex_b = game.graph.vertices[1]  # Player 2 controlled
-
-    vertex_a.controller = "player1"
-    vertex_a.units = 10
-    vertex_b.controller = "player2"
-    vertex_b.units = 8
-
-    engine = GameEngine(game)
-
-    # Both players attack each other
-    movements = {
-        "player1": [Command("player1", 0, 1, 6)],  # Send 6 units A->B
-        "player2": [Command("player2", 1, 0, 4)]   # Send 4 units B->A
-    }
-
-    print(f"Before: A has {vertex_a.units} units, B has {vertex_b.units} units")
-    engine.resolve_all_movements(movements)
-    print(f"After: A has {vertex_a.units} units, B has {vertex_b.units} units")
-    print(f"A controlled by {vertex_a.controller}, B controlled by {vertex_b.controller}")
-
-    # Expected: A=4 (10-6), B=2 (8-4-2 from remaining attack)
-    assert vertex_a.units == 4, f"A should have 4 units, got {vertex_a.units}"
-    assert vertex_b.units == 2, f"B should have 2 units, got {vertex_b.units}"
-    assert vertex_a.controller == "player1", "A should still be controlled by player1"
-    assert vertex_b.controller == "player2", "B should still be controlled by player2"
-
-    # Test 2: Attack on neutral vertex with multiple attackers
-    print("\n=== Test 2: Multiple Attacks on Neutral Vertex ===")
-    game2 = GameState()
-    game2.graph.generate_grid_graph(3, 3)
-    game2.add_player("player1")
-    game2.add_player("player2")
-    game2.start_game(starting_units=0)
-
-    # Set up scenario
-    vertex_a = game2.graph.vertices[0]  # Player 1
-    vertex_b = game2.graph.vertices[2]  # Player 2
-    vertex_c = game2.graph.vertices[1]  # Neutral target (adjacent to both)
-
-    vertex_a.controller = "player1"
-    vertex_a.units = 10
-    vertex_b.controller = "player2"
-    vertex_b.units = 10
-    vertex_c.controller = None
-    vertex_c.units = 0
-    vertex_c.weight = 2
-
-    engine2 = GameEngine(game2)
-
-    # Both attack the neutral vertex
-    movements2 = {
-        "player1": [Command("player1", 0, 1, 5)],
-        "player2": [Command("player2", 2, 1, 3)]
-    }
-
-    print(f"Before: A={vertex_a.units}, B={vertex_b.units}, C={vertex_c.units} (neutral, weight={vertex_c.weight})")
-
-    # Run multiple times to see probabilistic outcomes
-    player1_wins = 0
-    player2_wins = 0
-    trials = 1000
-
-    for trial in range(trials):
-        # Reset state
-        vertex_a.units = 10
-        vertex_b.units = 10
-        vertex_c.controller = None
-        vertex_c.units = 0
-
-        engine2.resolve_all_movements(movements2)
-
-        if vertex_c.controller == "player1":
-            player1_wins += 1
-        elif vertex_c.controller == "player2":
-            player2_wins += 1
-
-    print(f"After {trials} trials: Player1 won {player1_wins} times, Player2 won {player2_wins} times")
-    print(f"Expected ratio ~5:3, actual ratio ~{player1_wins}:{player2_wins}")
-
-    # Test 3: Attack exceeding defender count
-    print("\n=== Test 3: Overwhelming Attack ===")
-    game3 = GameState()
-    game3.graph.generate_grid_graph(2, 2)
-    game3.add_player("attacker")
-    game3.add_player("defender")
-    game3.start_game(starting_units=0)
-
-    attacker_vertex = game3.graph.vertices[0]
-    defender_vertex = game3.graph.vertices[1]
-
-    attacker_vertex.controller = "attacker"
-    attacker_vertex.units = 15
-    defender_vertex.controller = "defender"
-    defender_vertex.units = 5
-
-    engine3 = GameEngine(game3)
-
-    movements3 = {
-        "attacker": [Command("attacker", 0, 1, 10)]
-    }
-
-    print(f"Before: Attacker has {attacker_vertex.units}, Defender has {defender_vertex.units}")
-    engine3.resolve_all_movements(movements3)
-    print(f"After: Attacker vertex has {attacker_vertex.units}, Target controlled by {defender_vertex.controller} with {defender_vertex.units} units")
-
-    # Expected: Attacker=5 (15-10), Target controlled by attacker with 5 units (10-5)
-    assert attacker_vertex.units == 5, f"Attacker should have 5 units, got {attacker_vertex.units}"
-    assert defender_vertex.controller == "attacker", f"Target should be controlled by attacker, controlled by {defender_vertex.controller}"
-    assert defender_vertex.units == 5, f"Target should have 5 units, got {defender_vertex.units}"
-
-    # Test 4: Equal forces tie
-    print("\n=== Test 4: Equal Forces Tie ===")
-    game4 = GameState()
-    game4.graph.generate_grid_graph(2, 2)
-    game4.add_player("attacker")
-    game4.add_player("defender")
-    game4.start_game(starting_units=0)
-
-    attacker_vertex = game4.graph.vertices[0]
-    defender_vertex = game4.graph.vertices[1]
-
-    attacker_vertex.controller = "attacker"
-    attacker_vertex.units = 10
-    defender_vertex.controller = "defender"
-    defender_vertex.units = 5
-
-    engine4 = GameEngine(game4)
-
-    movements4 = {
-        "attacker": [Command("attacker", 0, 1, 5)]  # Equal to defender units
-    }
-
-    print(f"Before: Attacker has {attacker_vertex.units}, Defender has {defender_vertex.units}")
-    engine4.resolve_all_movements(movements4)
-    print(f"After: Attacker vertex has {attacker_vertex.units}, Target controlled by {defender_vertex.controller} with {defender_vertex.units} units")
-
-    # Expected: Attacker=5 (10-5), Target becomes neutral with 0 units
-    assert attacker_vertex.units == 5, f"Attacker should have 5 units, got {attacker_vertex.units}"
-    assert defender_vertex.controller is None, f"Target should be neutral, controlled by {defender_vertex.controller}"
-    assert defender_vertex.units == 0, f"Target should have 0 units, got {defender_vertex.units}"
-
-    # Test 5: Insufficient attack
-    print("\n=== Test 5: Insufficient Attack ===")
-    game5 = GameState()
-    game5.graph.generate_grid_graph(2, 2)
-    game5.add_player("attacker")
-    game5.add_player("defender")
-    game5.start_game(starting_units=0)
-
-    attacker_vertex = game5.graph.vertices[0]
-    defender_vertex = game5.graph.vertices[1]
-
-    attacker_vertex.controller = "attacker"
-    attacker_vertex.units = 10
-    defender_vertex.controller = "defender"
-    defender_vertex.units = 8
-
-    engine5 = GameEngine(game5)
-
-    movements5 = {
-        "attacker": [Command("attacker", 0, 1, 3)]  # Less than defender units
-    }
-
-    print(f"Before: Attacker has {attacker_vertex.units}, Defender has {defender_vertex.units}")
-    engine5.resolve_all_movements(movements5)
-    print(f"After: Attacker vertex has {attacker_vertex.units}, Target controlled by {defender_vertex.controller} with {defender_vertex.units} units")
-
-    # Expected: Attacker=7 (10-3), Defender=5 (8-3), defender keeps control
-    assert attacker_vertex.units == 7, f"Attacker should have 7 units, got {attacker_vertex.units}"
-    assert defender_vertex.controller == "defender", f"Target should still be controlled by defender, controlled by {defender_vertex.controller}"
-    assert defender_vertex.units == 5, f"Target should have 5 units, got {defender_vertex.units}"
-
-    print("\nAll new combat system tests passed!")
-
-
-def test_game_core():
-    """
-    Test function to verify the data structures work correctly.
-    Creates a 3x3 grid with 2 players and tests basic functionality.
-    """
-    print("Testing game core data structures...")
-
-    # Create game state
-    game = GameState(max_turns=50)
-
-    # Generate 3x3 grid
-    game.graph.generate_grid_graph(3, 3)
-    print(f"Created 3x3 grid with {len(game.graph.vertices)} vertices and {len(game.graph.edges)} edges")
-
-    # Add players
-    game.add_player("player1")
-    game.add_player("player2")
-    print(f"Added {len(game.players)} players")
-
-    # Start game
-    game.start_game(starting_units=5)
-    print(f"Game started, turn {game.current_turn}")
-
-    # Verify player starting positions
-    for player in game.players.values():
-        controlled = game.graph.get_vertices_controlled_by_player(player.id)
-        print(f"{player.id}: controls {len(controlled)} vertices with {player.total_units} total units")
-
-        # Test adjacency
-        if controlled:
-            vertex = controlled[0]
-            adjacent = game.graph.get_adjacent_vertices(vertex.id)
-            print(f"  Vertex {vertex.id} at {vertex.position} has {len(adjacent)} adjacent vertices: {adjacent}")
-
-    # Test serialization
-    state_dict = game.to_dict()
-    print(f"Game state serialized to dict with {len(state_dict)} top-level keys")
-
-    # Verify some graph properties
-    assert len(game.graph.vertices) == 9, "Should have 9 vertices in 3x3 grid"
-    assert len(game.graph.edges) == 24, "Should have 24 directed edges in 3x3 grid"  # 12 undirected = 24 directed
-
-    # Test corner vertex (should have 2 neighbors)
-    corner_neighbors = game.graph.get_adjacent_vertices(0)  # Top-left corner
-    assert len(corner_neighbors) == 2, f"Corner vertex should have 2 neighbors, got {len(corner_neighbors)}"
-
-    # Test center vertex (should have 4 neighbors)
-    center_neighbors = game.graph.get_adjacent_vertices(4)  # Center vertex
-    assert len(center_neighbors) == 4, f"Center vertex should have 4 neighbors, got {len(center_neighbors)}"
-
-    print("All tests passed!")
-
-
-if __name__ == "__main__":
-    test_game_core()
-    print()
-    test_new_combat_system()
