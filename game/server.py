@@ -107,7 +107,7 @@ class GameInstance:
 
         # Game state - initialize immediately with grid
         self.game_state = GameState(max_turns=self.max_turns)
-        self._generate_map()
+        self.generate_map()
 
         self.game_engine: Optional[GameEngine] = None
         self.game_started = False
@@ -153,7 +153,7 @@ class GameInstance:
         if self.server_callback:
             await self.server_callback(self.game_id, message, to_bots=True, to_viewers=False, specific_player=player_id)
 
-    def _generate_map(self) -> None:
+    def generate_map(self) -> None:
         """Generate the game map based on current settings."""
         if self.map_type == "hex":
             self.game_state.graph.generate_hex_graph(
@@ -176,6 +176,8 @@ class GameInstance:
                 self.maze_width, self.maze_height,
                 self.vertex_weight_range, self.vertex_remove_probability
             )
+
+        self.reassign_players_to_fresh_state()
 
     async def spawn_bots(self, num_bots: int, difficulty: str, requesting_player: str) -> bool:
         """Spawn AI bots to join this game."""
@@ -228,41 +230,11 @@ class GameInstance:
             # Create bot with connection to localhost (assuming server is local)
             bot = bot_class(game_id=self.game_id, player_id=bot_id, server_url="ws://localhost:8765")
 
-            # Set up bot to automatically start when ready
-            original_on_connection_confirmed = bot.on_connection_confirmed
-
-            def on_bot_connected(message):
-                if original_on_connection_confirmed:
-                    original_on_connection_confirmed(message)
-
-                # If this is the first bot and we now have minimum players, start immediately
-                asyncio.create_task(self._check_auto_start())
-
-            bot.on_connection_confirmed = on_bot_connected
-
             # Run the bot
             await bot._run_async()
 
         except Exception as e:
             logger.error(f"Game {self.game_id}: Bot {bot_id} crashed: {e}")
-
-    async def _check_auto_start(self) -> None:
-        """Check if we should auto-start the game with bots."""
-        try:
-            # Small delay to allow all bots to connect
-            await asyncio.sleep(0.5)
-
-            if (not self.game_started and
-                len(self.bot_players) >= self.minimum_players and
-                len(self.spawned_bots) > 0 and
-                BotConfig.AUTO_START_WITH_BOTS):
-
-                logger.info(f"Game {self.game_id}: Auto-starting with {len(self.bot_players)} players (including bots)")
-
-                await self.start_game()
-
-        except Exception as e:
-            logger.error(f"Game {self.game_id}: Error in auto-start: {e}")
 
     def get_player_count(self) -> int:
         """Get number of players in this game."""
@@ -282,14 +254,44 @@ class GameInstance:
 
         return False
 
+    def reassign_players_to_fresh_state(self) -> None:
+        """
+        Reassign all connected players to the current game state with new starting positions.
+        This is used after resetting the game or changing the map.
+        """
+        self.game_state.clear_players()
+
+        for player_id in self.bot_players:
+            # Add player to game state
+            self.game_state.add_player(player_id)
+
+            # Get available starting vertices
+            uncontrolled_vertices = self.game_state.graph.get_uncontrolled_vertices()
+            if uncontrolled_vertices:
+                # Assign a random starting vertex
+                starting_vertex = random.choice(uncontrolled_vertices)
+                starting_vertex.controller = player_id
+                starting_vertex.units = self.starting_units
+                starting_vertex.weight = self.starting_units
+
+                # Update player's total units
+                self.game_state.players[player_id].update_total_units(self.game_state.graph)
+
+                logger.info(f"Game {self.game_id}: Player {player_id} assigned to vertex {starting_vertex.id}")
+            else:
+                logger.warning(f"Game {self.game_id}: No available vertices for player {player_id}")
+
     def reset_game(self) -> None:
-        """Reset the game state to allow for a new game."""
+        """Reset the game state to allow for a new game while keeping players connected."""
         try:
             logger.info(f"Game {self.game_id}: Resetting game state...")
 
             # Cancel any running tasks
             if self.turn_timer_task and not self.turn_timer_task.done():
                 self.turn_timer_task.cancel()
+
+            # Store connected players before reset
+            connected_players = list(self.bot_players)
 
             # Clear game state
             self.game_started = False
@@ -300,12 +302,10 @@ class GameInstance:
 
             # Reset game state with fresh grid
             self.game_state = GameState(max_turns=self.max_turns)
-            self._generate_map()
 
-            # Clear players (they will need to rejoin)
-            self.bot_players.clear()
+            self.generate_map()
 
-            logger.info(f"Game {self.game_id} reset complete. Grid regenerated with {len(self.game_state.graph.vertices)} vertices")
+            logger.info(f"Game {self.game_id} reset complete. Grid regenerated with {len(self.game_state.graph.vertices)} vertices. {len(connected_players)} players retained.")
 
         except Exception as e:
             logger.error(f"Error resetting game {self.game_id}: {e}")
@@ -1164,29 +1164,24 @@ class GameServer:
                         try:
                             if key == "weight_min":
                                 min_val = int(value)
-
                                 if not (MapConfig.MIN_VERTEX_WEIGHT <= min_val <= MapConfig.MAX_VERTEX_WEIGHT):
                                     await ConnectionUtils.send_error(websocket, f"Weight minimum must be between {MapConfig.MIN_VERTEX_WEIGHT} and {MapConfig.MAX_VERTEX_WEIGHT}")
                                     return
-
                                 if vertex_weight_range:
                                     vertex_weight_range = (min_val, vertex_weight_range[1])
                                 else:
                                     vertex_weight_range = (min_val, min_val + 5)
                             elif key == "weight_max":
                                 max_val = int(value)
-
                                 if not (MapConfig.MIN_VERTEX_WEIGHT <= max_val <= MapConfig.MAX_VERTEX_WEIGHT):
                                     await ConnectionUtils.send_error(websocket, f"Weight maximum must be between {MapConfig.MIN_VERTEX_WEIGHT} and {MapConfig.MAX_VERTEX_WEIGHT}")
                                     return
-
                                 if vertex_weight_range:
                                     vertex_weight_range = (vertex_weight_range[0], max_val)
                                 else:
                                     vertex_weight_range = (1, max_val)
                             elif key == "remove_prob":
                                 vertex_remove_probability = float(value)
-
                                 if not (MapConfig.MIN_REMOVE_PROBABILITY <= vertex_remove_probability <= MapConfig.MAX_REMOVE_PROBABILITY):
                                     await ConnectionUtils.send_error(websocket, f"Remove probability must be between {MapConfig.MIN_REMOVE_PROBABILITY} and {MapConfig.MAX_REMOVE_PROBABILITY}")
                                     return
@@ -1205,7 +1200,6 @@ class GameServer:
                             return
 
                 # Update game parameters
-                old_type = game.map_type
                 game.map_type = map_type
                 game.vertex_weight_range = vertex_weight_range
                 game.vertex_remove_probability = vertex_remove_probability
@@ -1213,23 +1207,14 @@ class GameServer:
                 game.maze_height = maze_height
 
                 # Regenerate the map
-                game._generate_map()
-
-                # Clear any existing players since map changed
-                await self.clear_game_players(game_id)
-                game.bot_players.clear()
-                game.game_state.players.clear()
-
-                logger.info(f"Game {game_id}: Map changed from {old_type} to {map_type} (via viewer)")
-                logger.info(f"  Maze size: {maze_width}x{maze_height}")
-                logger.info(f"  Vertices: {len(game.game_state.graph.vertices)}")
+                game.generate_map()
 
                 await self.broadcast_game_state(game_id)
 
                 await ConnectionUtils.send_message(websocket, {
                     "type": "command_success",
                     "command": "map",
-                    "message": f"Map changed to {map_type} {maze_width}x{maze_height}"
+                    "message": f"Map changed to {map_type} {maze_width}x{maze_height}. All players retained."
                 })
 
             elif command == "reset":
@@ -1305,45 +1290,27 @@ class GameServer:
         except Exception as e:
             logger.error(f"Error cleaning up connection: {e}")
 
-    async def clear_game_players(self, game_id: str) -> None:
-        """Clear all players from a game."""
-        if game_id in self.bot_connections:
-            self.bot_connections[game_id].clear()
-
-        # Remove connection tracking for this game's players
-        connections_to_remove = []
-        for websocket, conn_game_id in self.connection_to_game.items():
-            if conn_game_id == game_id and websocket in self.connection_to_player:
-                connections_to_remove.append(websocket)
-
-        for websocket in connections_to_remove:
-            if websocket in self.connection_to_player:
-                del self.connection_to_player[websocket]
-
     async def reset_game(self, game_id: str) -> bool:
-        """Reset a specific game."""
+        """Reset a specific game while keeping players connected."""
         game = self.games.get(game_id)
         if not game:
             return False
 
-        # Clear all player connections
-        await self.clear_game_players(game_id)
-
         # Reset the game logic
         game.reset_game()
 
-        # Notify all clients about the reset
+        # Notify all clients about the reset with different messages
         await self.broadcast_to_bots(game_id, {
             "type": "game_reset",
-            "message": "Game has been reset. Please rejoin to participate in the next game."
+            "message": "Game has been reset. You remain connected for the next game."
         })
 
         await self.broadcast_to_viewers(game_id, {
             "type": "game_reset",
-            "message": "Game has been reset."
+            "message": "Game has been reset. All players remain connected."
         })
 
-        # Send the fresh game state
+        # Send the fresh game state with players already assigned
         await self.broadcast_game_state(game_id)
 
         return True
@@ -1521,74 +1488,6 @@ async def keyboard_input_handler(server: GameServer) -> None:
                     except Exception as e:
                         logger.error(f"Failed to start game: {e}")
 
-                elif command.startswith("set turns "):
-                    try:
-                        parts = command.split()
-                        if len(parts) < 4:
-                            logger.warning("Usage: set turns <game_id> <max_turns>")
-                        else:
-                            game_id = parts[2]
-                            max_turns = int(parts[3])
-
-                            if max_turns < 1:
-                                logger.warning("Max turns must be at least 1")
-                                continue
-
-                            game = server.get_game(game_id)
-                            if not game:
-                                logger.warning(f"Game {game_id} does not exist")
-                            elif game.game_started:
-                                logger.warning(f"Cannot change max turns for game {game_id} - game has already started")
-                            else:
-                                old_turns = game.max_turns
-                                game.max_turns = max_turns
-                                game.game_state.max_turns = max_turns
-                                logger.info(f"Game {game_id}: Max turns changed from {old_turns} to {max_turns}")
-
-                                # Broadcast updated game state to notify clients
-                                await server.broadcast_game_state(game_id)
-
-                    except ValueError:
-                        logger.warning("Max turns must be a valid number")
-                    except IndexError:
-                        logger.warning("Usage: set turns <game_id> <max_turns>")
-                    except Exception as e:
-                        logger.error(f"Failed to set max turns: {e}")
-
-                elif command.startswith("set duration "):
-                    try:
-                        parts = command.split()
-                        if len(parts) < 4:
-                            logger.warning("Usage: set duration <game_id> <seconds>")
-                        else:
-                            game_id = parts[2]
-                            duration = float(parts[3])
-
-                            if duration <= 0:
-                                logger.warning("Turn duration must be greater than 0")
-                                continue
-
-                            game = server.get_game(game_id)
-                            if not game:
-                                logger.warning(f"Game {game_id} does not exist")
-                            else:
-                                old_duration = game.turn_duration_seconds
-                                game.turn_duration_seconds = duration
-                                logger.info(f"Game {game_id}: Turn duration changed from {old_duration}s to {duration}s")
-
-                                if game.game_started:
-                                    logger.info(f"Game {game_id} is running - new duration will apply to subsequent turns")
-
-                                # Broadcast updated game state to notify clients
-                                await server.broadcast_game_state(game_id)
-
-                    except ValueError:
-                        logger.warning("Duration must be a valid number")
-                    except IndexError:
-                        logger.warning("Usage: set duration <game_id> <seconds>")
-                    except Exception as e:
-                        logger.error(f"Failed to set turn duration: {e}")
-
                 elif command == "status":
                     logger.info("=== Multi-Game Server Status ===")
                     logger.info(f"Active Games: {len(server.games)}")
@@ -1606,99 +1505,6 @@ async def keyboard_input_handler(server: GameServer) -> None:
                             turn = game.game_state.current_turn if game.game_state else 0
                             logger.info(f"  {game_id}: {status}, Turn {turn}/{game.max_turns}, Duration: {game.turn_duration_seconds}s")
 
-                elif command.startswith("map "):
-                    try:
-                        parts = command.split()
-                        if len(parts) < 3:
-                            logger.warning("Usage: map <game_id> <type> [options]")
-                            logger.warning("  Types: grid, hex")
-                            logger.warning("  Options: weight_min=N weight_max=N remove_prob=0.1 maze_width=N maze_height=N")
-                        else:
-                            game_id = parts[1]
-                            map_type = parts[2]
-
-                            if map_type not in ["grid", "hex"]:
-                                logger.warning("Map type must be 'grid' or 'hex'")
-                                continue
-
-                            game = server.get_game(game_id)
-                            if not game:
-                                logger.warning(f"Game {game_id} does not exist")
-                                continue
-
-                            if game.game_started:
-                                logger.warning(f"Cannot change map for game {game_id} - game has already started")
-                                continue
-
-                            # Parse options
-                            vertex_weight_range = game.vertex_weight_range
-                            vertex_remove_probability = game.vertex_remove_probability
-                            maze_width = game.maze_width
-                            maze_height = game.maze_height
-
-                            for part in parts[3:]:
-                                if "=" in part:
-                                    key, value = part.split("=", 1)
-                                    if key == "weight_min":
-                                        min_val = int(value)
-                                        if vertex_weight_range:
-                                            vertex_weight_range = (min_val, vertex_weight_range[1])
-                                        else:
-                                            vertex_weight_range = (min_val, min_val + 5)
-                                    elif key == "weight_max":
-                                        max_val = int(value)
-                                        if vertex_weight_range:
-                                            vertex_weight_range = (vertex_weight_range[0], max_val)
-                                        else:
-                                            vertex_weight_range = (1, max_val)
-                                    elif key == "remove_prob":
-                                        vertex_remove_probability = float(value)
-                                        if not (0.0 <= vertex_remove_probability <= 1.0):
-                                            logger.warning("Remove probability must be between 0.0 and 1.0")
-                                            continue
-                                    elif key == "maze_width":
-                                        maze_width = int(value)
-                                        if maze_width < 1:
-                                            logger.warning("Maze width must be at least 1")
-                                            continue
-                                    elif key == "maze_height":
-                                        maze_height = int(value)
-                                        if maze_height < 1:
-                                            logger.warning("Maze height must be at least 1")
-                                            continue
-
-                            # Update game parameters
-                            old_type = game.map_type
-                            game.map_type = map_type
-                            game.vertex_weight_range = vertex_weight_range
-                            game.vertex_remove_probability = vertex_remove_probability
-                            game.maze_width = maze_width
-                            game.maze_height = maze_height
-
-                            # Regenerate the map
-                            game._generate_map()
-
-                            logger.info(f"Game {game_id}: Map changed from {old_type} to {map_type}")
-                            logger.info(f"  Maze size: {maze_width}x{maze_height}")
-                            logger.info(f"  Vertices: {len(game.game_state.graph.vertices)}")
-                            if vertex_weight_range:
-                                logger.info(f"  Weight range: {vertex_weight_range}")
-                            if vertex_remove_probability:
-                                logger.info(f"  Remove probability: {vertex_remove_probability}")
-
-                            # Clear any existing players since map changed
-                            await server.clear_game_players(game_id)
-                            game.bot_players.clear()
-                            game.game_state.players.clear()
-
-                            # Broadcast updated game state
-                            await server.broadcast_game_state(game_id)
-
-                    except ValueError as e:
-                        logger.warning(f"Invalid value: {e}")
-                    except Exception as e:
-                        logger.error(f"Failed to change map: {e}")
-
                 elif command == "help":
                     logger.info("=== Available Commands ===")
                     logger.info("  'quit' or 'exit' - Stop the server")
@@ -1706,11 +1512,6 @@ async def keyboard_input_handler(server: GameServer) -> None:
                     logger.info("  'create <game_id>' - Create a new game")
                     logger.info("  'start <game_id>' - Force start a specific game")
                     logger.info("  'reset <game_id>' - Reset a specific game")
-                    logger.info("  'set turns <game_id> <max_turns>' - Set maximum turns for a game (before start)")
-                    logger.info("  'set duration <game_id> <seconds>' - Set turn duration for a game")
-                    logger.info("  'map <game_id> <type> [options]' - Change map type and parameters (before start)")
-                    logger.info("    Types: grid, hex")
-                    logger.info("    Options: weight_min=N weight_max=N remove_prob=0.1 maze_width=N maze_height=N")
                     logger.info("  'status' - Show current server status")
                     logger.info("  'help' - Show this help message")
 

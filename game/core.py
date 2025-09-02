@@ -593,6 +593,12 @@ class GameState:
         self.final_rankings: List[List[str]] = []  # List of lists, each inner list is a tie group
         self.max_turns = max_turns
 
+    def clear_players(self):
+        """
+        Clear players from the game.
+        """
+        self.players.clear()
+
     def add_player(self, player_id: str) -> None:
         """
         Add a player to the game.
