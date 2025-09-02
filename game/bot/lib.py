@@ -12,9 +12,9 @@ from typing import List, Dict, Optional, Tuple, Any, Callable
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 @dataclass
