@@ -58,13 +58,13 @@ def generate_game_id() -> str:
 
 if __name__ == "__main__":
     game_id = generate_game_id()
-    
+
     player_name = input("Enter your player name: ")
 
     print(f"\nYou can view the game at: https://cw.slama.dev/?game={game_id}")
-    print("\nFeel free to modify the in-browser settings to change map/rounds/time/etc.")
+    print("\nFeel free to modify the in-browser settings to change map/rounds/time/etc.\n")
 
-    bot = EasyBot(game_id, player_name)
+    bot = EasyBot(game_id, player_name, server_url="wss://cw.slama.dev/api")
 
     bot.run(bots=[(1, "easy"), (1, "medium"), (1, "hard")])
 ```
