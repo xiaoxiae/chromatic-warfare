@@ -11,6 +11,7 @@ import string
 from typing import List, Dict, Optional, Tuple, Any, Callable
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
+from collections import deque
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -128,14 +129,23 @@ class Game:
         self.enemy_vertices = [v for v in self.vertices.values() if v.is_enemy]
         self.neutral_vertices = [v for v in self.vertices.values() if v.is_neutral]
 
+        # Cache for expensive computations
+        self._frontline_vertices = None
+        self._frontline_distances = None
+        self._neighbor_cache = {}
+
     def get_vertex(self, vertex_id: int) -> Optional[Vertex]:
         """Get vertex by ID."""
         return self.vertices.get(vertex_id)
 
     def get_neighbors(self, vertex_id: int) -> List[Vertex]:
-        """Get all neighboring vertices."""
-        neighbor_ids = self._adjacency.get(vertex_id, [])
-        return [self.vertices[vid] for vid in neighbor_ids if vid in self.vertices]
+        """Get all neighboring vertices (with caching)."""
+        if vertex_id not in self._neighbor_cache:
+            neighbor_ids = self._adjacency.get(vertex_id, [])
+            self._neighbor_cache[vertex_id] = [
+                self.vertices[vid] for vid in neighbor_ids if vid in self.vertices
+            ]
+        return self._neighbor_cache[vertex_id]
 
     def get_enemy_neighbors(self, vertex_id: int) -> List[Vertex]:
         """Get enemy neighboring vertices."""
@@ -191,22 +201,63 @@ class Game:
         return target.units
 
     def get_frontline_vertices(self) -> List[Vertex]:
-        """Get vertices that have enemy or neutral neighbors."""
-        frontline = []
-        for vertex in self.my_vertices:
-            neighbors = self.get_neighbors(vertex.id)
-            if any(not n.is_mine for n in neighbors):
-                frontline.append(vertex)
+        """Get vertices that have enemy or neutral neighbors (cached)."""
+        if self._frontline_vertices is None:
+            self._frontline_vertices = []
+            for vertex in self.my_vertices:
+                neighbors = self.get_neighbors(vertex.id)
+                if any(not n.is_mine for n in neighbors):
+                    self._frontline_vertices.append(vertex)
 
-        return frontline
+        return self._frontline_vertices
+
+    def _compute_all_frontline_distances(self) -> Dict[int, int]:
+        """
+        Compute distances from all vertices to the frontline in a single pass.
+        Uses multi-source BFS starting from all frontline vertices.
+
+        Returns:
+            Dictionary mapping vertex_id to distance to nearest frontline
+        """
+        distances = {}
+
+        # Get all frontline vertices
+        frontline = self.get_frontline_vertices()
+        if not frontline:
+            # No frontline exists
+            return {v.id: -1 for v in self.my_vertices}
+
+        # Initialize queue with all frontline vertices at distance 0
+        queue = deque()
+        for vertex in frontline:
+            distances[vertex.id] = 0
+            queue.append((vertex.id, 0))
+
+        # Multi-source BFS
+        while queue:
+            current_id, distance = queue.popleft()
+
+            for neighbor in self.get_neighbors(current_id):
+                # Only traverse through my own vertices
+                if not neighbor.is_mine:
+                    continue
+
+                # If we haven't visited this vertex yet
+                if neighbor.id not in distances:
+                    distances[neighbor.id] = distance + 1
+                    queue.append((neighbor.id, distance + 1))
+
+        # Fill in -1 for any vertices not reached (shouldn't happen in connected graph)
+        for vertex in self.my_vertices:
+            if vertex.id not in distances:
+                distances[vertex.id] = -1
+
+        return distances
 
     def get_distance_to_frontline(self, vertex_id: int) -> int:
         """
         Calculate the shortest distance from a vertex to the nearest frontline vertex.
-
-        A frontline vertex is one that has enemy or neutral neighbors.
-        Returns 0 if the vertex itself is on the frontline.
-        Returns -1 if the vertex is not mine or doesn't exist.
+        Uses cached computation for efficiency.
 
         Args:
             vertex_id: ID of the vertex to check
@@ -218,47 +269,32 @@ class Game:
         if not vertex or not vertex.is_mine:
             return -1
 
-        # BFS to find shortest distance to frontline
-        from collections import deque
+        # Compute all distances once and cache
+        if self._frontline_distances is None:
+            self._frontline_distances = self._compute_all_frontline_distances()
 
-        # Get all frontline vertices
-        frontline_ids = {v.id for v in self.get_frontline_vertices()}
+        return self._frontline_distances.get(vertex_id, -1)
 
-        if not frontline_ids:
-            # No frontline exists (all vertices are interior or we have no territory)
-            return -1
+    def get_all_frontline_distances(self) -> Dict[int, int]:
+        """
+        Get distances to frontline for all vertices at once.
+        More efficient than calling get_distance_to_frontline repeatedly.
 
-        if vertex_id in frontline_ids:
-            # This vertex is already on the frontline
-            return 0
+        Returns:
+            Dictionary mapping vertex_id to distance to nearest frontline
+        """
+        if self._frontline_distances is None:
+            self._frontline_distances = self._compute_all_frontline_distances()
+        return self._frontline_distances.copy()
 
-        # BFS from the given vertex to find closest frontline
-        queue = deque([(vertex_id, 0)])
-        visited = {vertex_id}
-
-        while queue:
-            current_id, distance = queue.popleft()
-
-            # Check all neighbors
-            for neighbor in self.get_neighbors(current_id):
-                if neighbor.id in visited:
-                    continue
-
-                # Only traverse through my own vertices
-                if not neighbor.is_mine:
-                    continue
-
-                visited.add(neighbor.id)
-
-                # If this neighbor is on the frontline, we found our answer
-                if neighbor.id in frontline_ids:
-                    return distance + 1
-
-                # Otherwise, continue searching
-                queue.append((neighbor.id, distance + 1))
-
-        # No path found (shouldn't happen if graph is connected)
-        return -1
+    def invalidate_caches(self):
+        """
+        Invalidate cached computations. Call this if the game state changes
+        significantly and you need fresh computations.
+        """
+        self._frontline_vertices = None
+        self._frontline_distances = None
+        self._neighbor_cache.clear()
 
     @property
     def my_player(self) -> Optional[Player]:
