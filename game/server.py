@@ -216,14 +216,6 @@ class GameInstance:
                 bot_task = asyncio.create_task(self._run_bot(bot_class, bot_id))
                 self.spawned_bots.append(bot_task)
 
-            # Notify requesting player
-            await self.send_to_bot(requesting_player, {
-                "type": "bots_spawned",
-                "num_bots": num_bots,
-                "difficulty": difficulty,
-                "message": f"Spawned {num_bots} {difficulty} AI bots"
-            })
-
             return True
 
         except Exception as e:
@@ -1023,14 +1015,7 @@ class GameServer:
             return
 
         success = await game.spawn_bots(num_bots, difficulty, player_id)
-        if success:
-            await ConnectionUtils.send_message(websocket, {
-                "type": "bots_spawned",
-                "num_bots": num_bots,
-                "difficulty": difficulty,
-                "message": f"Spawned {num_bots} {difficulty} AI bots"
-            })
-        else:
+        if not success:
             await ConnectionUtils.send_error(websocket, f"Failed to spawn {difficulty} bots")
 
     async def handle_create_game(self, websocket: ServerConnection, data: Dict[str, Any]) -> None:
