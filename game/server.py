@@ -94,7 +94,6 @@ class GameInstance:
         self.maze_height = maze_height or self.grid_height
 
         # Grace period management
-        self.grace_period_seconds = GameDefaults.GRACE_PERIOD
         self.minimum_players = GameDefaults.MINIMUM_PLAYERS
 
         # Turn management
@@ -112,9 +111,6 @@ class GameInstance:
 
         self.game_engine: Optional[GameEngine] = None
         self.game_started = False
-
-        # Grace period management
-        self.grace_period_task: Optional[asyncio.Task] = None
 
         # Turn management
         self.turn_commands: Dict[str, List[Command]] = {}  # player_id -> list of commands
@@ -271,10 +267,6 @@ class GameInstance:
 
                 logger.info(f"Game {self.game_id}: Auto-starting with {len(self.bot_players)} players (including bots)")
 
-                # Cancel grace period and start immediately
-                if self.grace_period_task and not self.grace_period_task.done():
-                    self.grace_period_task.cancel()
-
                 await self.start_game()
 
         except Exception as e:
@@ -304,8 +296,6 @@ class GameInstance:
             logger.info(f"Game {self.game_id}: Resetting game state...")
 
             # Cancel any running tasks
-            if self.grace_period_task and not self.grace_period_task.done():
-                self.grace_period_task.cancel()
             if self.turn_timer_task and not self.turn_timer_task.done():
                 self.turn_timer_task.cancel()
 
@@ -313,7 +303,6 @@ class GameInstance:
             self.game_started = False
             self.game_engine = None
             self.turn_commands.clear()
-            self.grace_period_task = None
             self.turn_timer_task = None
             self.game_ended_time = None
 
@@ -341,10 +330,6 @@ class GameInstance:
                 return False
 
             logger.info(f"Game {self.game_id}: Force starting with {len(self.bot_players)} players")
-
-            # Cancel grace period if running
-            if self.grace_period_task and not self.grace_period_task.done():
-                self.grace_period_task.cancel()
 
             # Override minimum players requirement temporarily
             original_minimum = self.minimum_players
@@ -404,11 +389,6 @@ class GameInstance:
             # Broadcast updated game state
             await self.broadcast_message(self.get_game_state_dict())
 
-            # Check if we can start the grace period
-            if len(self.bot_players) >= self.minimum_players and not self.game_started:
-                if self.grace_period_task is None or self.grace_period_task.done():
-                    self.grace_period_task = asyncio.create_task(self.start_grace_period())
-
             return True
 
         except Exception as e:
@@ -441,10 +421,6 @@ class GameInstance:
 
             logger.info(f"Game {self.game_id}: Player {player_id} removed. Remaining players: {len(self.bot_players)}")
 
-            # Check if we still have enough players
-            if len(self.bot_players) < self.minimum_players:
-                await self.cancel_grace_period()
-
             # Broadcast updated game state
             await self.broadcast_message(self.get_game_state_dict())
 
@@ -453,20 +429,6 @@ class GameInstance:
         except Exception as e:
             logger.error(f"Error removing player {player_id} from game {self.game_id}: {e}")
             return False
-
-    async def cancel_grace_period(self) -> None:
-        """Cancel the grace period if there are not enough players."""
-        if self.grace_period_task and not self.grace_period_task.done():
-            self.grace_period_task.cancel()
-            logger.info(f"Game {self.game_id}: Grace period canceled - not enough players ({len(self.bot_players)}/{self.minimum_players})")
-
-            # Notify remaining players
-            await self.broadcast_message({
-                "type": "grace_period_canceled",
-                "reason": "insufficient_players",
-                "current_players": len(self.bot_players),
-                "minimum_required": self.minimum_players
-            }, to_bots=True, to_viewers=False)
 
     def has_only_bots_remaining(self) -> bool:
         """Check if the game only has AI bots remaining (no human players)."""
@@ -488,8 +450,6 @@ class GameInstance:
                 logger.info(f"Game {self.game_id}: Only bots remaining, terminating game")
 
                 # Cancel any running tasks
-                if self.grace_period_task and not self.grace_period_task.done():
-                    self.grace_period_task.cancel()
                 if self.turn_timer_task and not self.turn_timer_task.done():
                     self.turn_timer_task.cancel()
 
@@ -563,35 +523,6 @@ class GameInstance:
         except Exception as e:
             logger.error(f"Error handling move command in game {self.game_id}: {e}")
             return False
-
-    async def start_grace_period(self) -> None:
-        """Start the grace period for additional players to join."""
-        try:
-            if self.game_started:
-                return
-
-            logger.info(f"Game {self.game_id}: Starting {self.grace_period_seconds} second grace period")
-
-            # Notify players about grace period
-            await self.broadcast_message({
-                "type": "grace_period_started",
-                "duration_seconds": self.grace_period_seconds,
-                "current_players": len(self.bot_players)
-            }, to_bots=True, to_viewers=False)
-
-            await asyncio.sleep(self.grace_period_seconds)
-
-            # Check again if we still have enough players and game hasn't started
-            if not self.game_started and len(self.bot_players) >= self.minimum_players:
-                await self.start_game()
-            else:
-                logger.info(f"Game {self.game_id}: Grace period ended but conditions not met for game start")
-
-        except asyncio.CancelledError:
-            logger.info(f"Game {self.game_id}: Grace period was cancelled")
-            raise
-        except Exception as e:
-            logger.error(f"Error in grace period for game {self.game_id}: {e}")
 
     async def start_game(self) -> None:
         """Initialize and start the game."""
@@ -1866,8 +1797,6 @@ async def run_server(host: str | None = None, port: int | None = None,
 
         # Cancel any running tasks in all games
         for game in server.games.values():
-            if game.grace_period_task and not game.grace_period_task.done():
-                game.grace_period_task.cancel()
             if game.turn_timer_task and not game.turn_timer_task.done():
                 game.turn_timer_task.cancel()
 

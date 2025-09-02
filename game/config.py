@@ -23,9 +23,6 @@ class GameDefaults:
     STARTING_UNITS = 1
     MINIMUM_PLAYERS = 2
 
-    # Grace period before game starts
-    GRACE_PERIOD = 15.0  # seconds
-
     # Map generation
     MAP_TYPE = "grid"  # "grid" or "hex"
     VERTEX_WEIGHT_RANGE = None  # (min, max) or None for weight=1
