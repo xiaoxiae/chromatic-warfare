@@ -1,504 +1,818 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chromatic Warfare</title>
-    <link rel="stylesheet" href="./src/style.css">
-    <link rel="icon" type="image/png" href="/assets/logo.png">
-</head>
-<body class="font-sans bg-solarized-base3 text-solarized-base00 overflow-hidden h-screen">
-    <div class="fixed inset-0">
-        <div class="absolute top-0 left-0 md:right-64 right-0 bottom-0">
-            <div class="absolute top-0 left-0 right-0 bg-solarized-base2/95 backdrop-blur-md p-4 px-6 border-b border-solarized-base1/20 shadow-lg">
-                <div class="flex flex-col gap-3">
-                    <div>
-                    <div class="flex items-center justify-center">
-                        <img src="/assets/logo.png" alt="Chromatic Warfare Logo" class="w-8 h-8 mr-3">
-                        <h1 class="text-2xl font-light text-solarized-base01 tracking-wide">Chromatic Warfare</h1>
-                    </div>
-
-                    <div class="flex items-center justify-center py-2">
-                        <h2 class="text-1xl text-solarized-blue hover:text-solarized-cyan transition-colors italic underline tracking-wide"><a href="https://github.com/xiaoxiae/chromatic-warfare/tree/master/game/bot" target="_blank" rel="noopener noreferrer" class="">How can I play?</a></h2>
-                    </div>
-                    </div>
-
-                        <button id="menuToggle" class="md:hidden fixed right-5 py-1 px-2.5 text-solarized-base01 hover:text-solarized-base00 transition-colors rounded-lg hover:bg-solarized-base3/40">
-                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
-                            </svg>
-                        </button>
-                    
-                    <div class="flex items-center gap-4 text-sm justify-center">
-                        <!-- Connection Status -->
-                        <div class="flex items-center gap-2.5 bg-solarized-base3/40 rounded-full px-3 py-1.5 border border-solarized-base1/20 h-8">
-                            <span class="w-3 h-3 rounded-full bg-solarized-yellow animate-pulse" id="connectionStatus"></span>
-                            <span class="hidden md:block text-solarized-base01 font-medium" id="connectionText">Connecting...</span>
-                        </div>
-                        
-                        <!-- Turn Progress -->
-                        <div class="flex items-center gap-2.5 bg-solarized-base3/40 rounded-full px-3 py-1.5 border border-solarized-base1/20 h-8">
-                            <svg class="w-4 h-4 text-solarized-blue" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
-                            </svg>
-                            <span class="text-solarized-base01 font-mono" id="currentTurn">-</span>
-                            <span class="text-solarized-base1 font-mono text-xs" id="turnProgress"> / -</span>
-                        </div>
-                        
-                        <!-- Turn Duration -->
-                        <div class="flex items-center gap-2.5 bg-solarized-base3/40 rounded-full px-3 py-1.5 border border-solarized-base1/20 h-8">
-                            <svg class="w-4 h-4 text-solarized-orange" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                            </svg>
-                            <span class="text-solarized-base01 font-mono" id="turnDuration">-</span>
-                            <span class="text-solarized-base1 text-xs">s</span>
-                        </div>
-                        
-                        <!-- Game Status -->
-                        <div class="flex items-center gap-2.5 bg-solarized-base3/40 rounded-full px-3 py-1.5 border border-solarized-base1/20 h-8">
-                            <svg class="w-4 h-4 text-solarized-violet" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                            </svg>
-                            <span class="text-solarized-base01 font-medium capitalize" id="gameStatus">Waiting</span>
-                        </div>
-                    </div>
-
-                    <!-- Game ID and Join (hidden in streamer mode) -->
-                    <div class="flex items-center justify-center gap-3" id="gameIdSection">
-                        <label for="gameIdInput" class="text-sm text-solarized-base01 font-medium">Game ID:</label>
-                        <div class="flex items-center gap-2">
-                            <input 
-                                type="text" 
-                                id="gameIdInput" 
-                                placeholder="Enter game ID..."
-                                class="px-3 py-1.5 text-sm bg-solarized-base3/60 border border-solarized-base1/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 focus:border-solarized-blue text-solarized-base00 placeholder-solarized-base1"
-                                style="min-width: 120px;"
-                            >
-                            <button 
-                                id="joinGameBtn"
-                                class="px-3 py-1.5 text-sm bg-solarized-blue text-solarized-base3 rounded-lg hover:bg-solarized-cyan transition-colors focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 font-medium"
-                            >
-                                Join
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- Main Action Buttons -->
-                    <div class="flex items-center justify-center gap-3">
-                        <button 
-                            id="settingsBtn"
-                            class="px-3 py-1.5 text-sm bg-solarized-base01 text-solarized-base3 rounded-lg hover:bg-solarized-base00 transition-colors focus:outline-none focus:ring-2 focus:ring-solarized-base01/50 font-medium flex items-center gap-1.5"
-                        >
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                            </svg>
-                            Settings
-                        </button>
-                        <button 
-                            id="forceStartBtn"
-                            class="px-3 py-1.5 text-sm bg-solarized-base01 text-solarized-base3 rounded-lg hover:bg-solarized-base00 transition-colors focus:outline-none focus:ring-2 focus:ring-solarized-base01/50 font-medium flex items-center gap-1.5"
-                        >
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h1m4 0h1m-6 4h.01M15 14h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                            </svg>
-                            Start Game
-                        </button>
-                        <button 
-                            id="resetGameBtn"
-                            class="px-3 py-1.5 text-sm bg-solarized-base01 text-solarized-base3 rounded-lg hover:bg-solarized-base00 transition-colors focus:outline-none focus:ring-2 focus:ring-solarized-base01/50 font-medium flex items-center gap-1.5"
-                        >
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
-                            </svg>
-                            Reset Game
-                        </button>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="absolute top-64 left-0 right-0 bottom-0">
-                <canvas id="gameCanvas" class="w-full h-full block"></canvas>
-            </div>
-            
-            <div class="absolute inset-0 bg-solarized-base3/90 backdrop-blur-md hidden flex-col justify-center items-center z-50" id="gameOverOverlay">
-                <div class="bg-solarized-base2/90 rounded-2xl p-10 text-center max-w-md border-2 border-solarized-base1/30">
-                    <h2 class="text-4xl mb-5 bg-gradient-to-r from-solarized-yellow to-solarized-orange bg-clip-text text-transparent">Game Over!</h2>
-                    <div class="text-lg mb-5" id="winnerList"></div>
-                    <div class="text-left mt-5" id="finalRankings"></div>
-                </div>
-            </div>
-
-            <!-- Game Settings Modal -->
-            <div class="absolute inset-0 bg-black/60 backdrop-blur-sm hidden flex items-center justify-center z-50" id="settingsModal">
-                <div class="bg-solarized-base2/95 rounded-xl p-6 max-w-md w-full mx-4 border border-solarized-base1/30 max-h-[80vh] overflow-y-auto">
-                    <div class="flex items-center justify-between mb-6">
-                        <h3 class="text-xl font-medium text-solarized-base01">Game Settings</h3>
-                        <button id="closeSettings" class="p-1 text-solarized-base01 hover:text-solarized-base00 transition-colors">
-                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                            </svg>
-                        </button>
-                    </div>
-
-                    <div class="space-y-6">
-                        <!-- Game Settings Section -->
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Chromatic Warfare</title>
+        <link rel="stylesheet" href="./src/style.css" />
+        <link rel="icon" type="image/png" href="/assets/logo.png" />
+    </head>
+    <body
+        class="font-sans bg-solarized-base3 text-solarized-base00 overflow-hidden h-screen"
+    >
+        <div class="fixed inset-0">
+            <div class="absolute top-0 left-0 md:right-64 right-0 bottom-0">
+                <div
+                    class="absolute top-0 left-0 right-0 bg-solarized-base2/95 backdrop-blur-md p-4 px-6 border-b border-solarized-base1/20 shadow-lg"
+                >
+                    <div class="flex flex-col gap-3">
                         <div>
-                            <h4 class="text-lg font-medium text-solarized-base01 mb-4">Game Configuration</h4>
-                            
-                            <!-- Max Turns -->
-                            <div class="mb-4">
-                                <label for="maxTurnsInput" class="block text-sm font-medium text-solarized-base01 mb-2">Max Turns</label>
-                                <input 
-                                    type="number" 
-                                    id="maxTurnsInput" 
-                                    value="10"
-                                    class="w-full px-3 py-2 text-sm bg-solarized-base3/60 border border-solarized-base1/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 focus:border-solarized-blue text-solarized-base00"
+                            <div class="flex items-center justify-center">
+                                <img
+                                    src="/assets/logo.png"
+                                    alt="Chromatic Warfare Logo"
+                                    class="w-8 h-8 mr-3"
+                                />
+                                <h1
+                                    class="text-2xl font-light text-solarized-base01 tracking-wide"
+                                >
+                                    Chromatic Warfare
+                                </h1>
+                            </div>
+
+                            <div class="flex items-center justify-center py-2">
+                                <h2
+                                    class="text-1xl text-solarized-blue hover:text-solarized-cyan transition-colors italic underline tracking-wide"
+                                >
+                                    <a
+                                        href="https://github.com/xiaoxiae/chromatic-warfare/tree/master/game/bot"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        class=""
+                                        >How can I play?</a
+                                    >
+                                </h2>
+                            </div>
+                        </div>
+
+                        <button
+                            id="menuToggle"
+                            class="md:hidden fixed right-5 py-1 px-2.5 text-solarized-base01 hover:text-solarized-base00 transition-colors rounded-lg hover:bg-solarized-base3/40"
+                        >
+                            <svg
+                                class="w-6 h-6"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                            >
+                                <path
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="2"
+                                    d="M4 6h16M4 12h16M4 18h16"
+                                ></path>
+                            </svg>
+                        </button>
+
+                        <div
+                            class="flex items-center gap-4 text-sm justify-center"
+                        >
+                            <!-- Connection Status -->
+                            <div
+                                class="flex items-center gap-2.5 bg-solarized-base3/40 rounded-full px-3 py-1.5 border border-solarized-base1/20 h-8"
+                            >
+                                <span
+                                    class="w-3 h-3 rounded-full bg-solarized-yellow animate-pulse"
+                                    id="connectionStatus"
+                                ></span>
+                                <span
+                                    class="hidden md:block text-solarized-base01 font-medium"
+                                    id="connectionText"
+                                    >Connecting...</span
+                                >
+                            </div>
+
+                            <!-- Turn Progress -->
+                            <div
+                                class="flex items-center gap-2.5 bg-solarized-base3/40 rounded-full px-3 py-1.5 border border-solarized-base1/20 h-8"
+                            >
+                                <svg
+                                    class="w-4 h-4 text-solarized-blue"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        stroke-width="2"
+                                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                                    ></path>
+                                </svg>
+                                <span
+                                    class="text-solarized-base01 font-mono"
+                                    id="currentTurn"
+                                    >-</span
+                                >
+                                <span
+                                    class="text-solarized-base1 font-mono text-xs"
+                                    id="turnProgress"
+                                >
+                                    / -</span
                                 >
                             </div>
 
                             <!-- Turn Duration -->
-                            <div class="mb-4">
-                                <label for="turnDurationInput" class="block text-sm font-medium text-solarized-base01 mb-2">Turn Duration (seconds)</label>
-                                <input 
-                                    type="number" 
-                                    id="turnDurationInput" 
-                                    step="0.1" 
-                                    value="1.0"
-                                    class="w-full px-3 py-2 text-sm bg-solarized-base3/60 border border-solarized-base1/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 focus:border-solarized-blue text-solarized-base00"
+                            <div
+                                class="flex items-center gap-2.5 bg-solarized-base3/40 rounded-full px-3 py-1.5 border border-solarized-base1/20 h-8"
+                            >
+                                <svg
+                                    class="w-4 h-4 text-solarized-orange"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        stroke-width="2"
+                                        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                                    ></path>
+                                </svg>
+                                <span
+                                    class="text-solarized-base01 font-mono"
+                                    id="turnDuration"
+                                    >-</span
+                                >
+                                <span class="text-solarized-base1 text-xs"
+                                    >s</span
+                                >
+                            </div>
+
+                            <!-- Game Status -->
+                            <div
+                                class="flex items-center gap-2.5 bg-solarized-base3/40 rounded-full px-3 py-1.5 border border-solarized-base1/20 h-8"
+                            >
+                                <svg
+                                    class="w-4 h-4 text-solarized-violet"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        stroke-width="2"
+                                        d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                                    ></path>
+                                </svg>
+                                <span
+                                    class="text-solarized-base01 font-medium capitalize"
+                                    id="gameStatus"
+                                    >Waiting</span
                                 >
                             </div>
                         </div>
 
-                        <!-- Map Settings Section -->
-                        <div class="border-t border-solarized-base1/30 pt-6">
-                            <h4 class="text-lg font-medium text-solarized-base01 mb-4">Map Configuration</h4>
-                            
-                            <!-- Map Type -->
-                            <div class="mb-4">
-                                <label for="mapTypeSelect" class="block text-sm font-medium text-solarized-base01 mb-2">Map Type</label>
-                                <select 
-                                    id="mapTypeSelect"
-                                    class="w-full px-3 py-2 text-sm bg-solarized-base3/60 border border-solarized-base1/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 focus:border-solarized-blue text-solarized-base00"
-                                >
-                                    <option value="grid">Grid</option>
-                                    <option value="hex">Hexagonal</option>
-                                </select>
-                            </div>
-
-                            <!-- Map Size -->
-                            <div class="grid grid-cols-2 gap-3 mb-4">
-                                <div>
-                                    <label for="mapWidthInput" class="block text-sm font-medium text-solarized-base01 mb-2">Width</label>
-                                    <input 
-                                        type="number" 
-                                        id="mapWidthInput" 
-                                        value="5"
-                                        class="w-full px-3 py-2 text-sm bg-solarized-base3/60 border border-solarized-base1/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 focus:border-solarized-blue text-solarized-base00"
-                                    >
-                                </div>
-                                <div>
-                                    <label for="mapHeightInput" class="block text-sm font-medium text-solarized-base01 mb-2">Height</label>
-                                    <input 
-                                        type="number" 
-                                        id="mapHeightInput" 
-                                        value="5"
-                                        class="w-full px-3 py-2 text-sm bg-solarized-base3/60 border border-solarized-base1/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 focus:border-solarized-blue text-solarized-base00"
-                                    >
-                                </div>
-                            </div>
-
-                            <!-- Vertex Weight Range -->
-                            <div class="grid grid-cols-2 gap-3 mb-4">
-                                <div>
-                                    <label for="weightMinInput" class="block text-sm font-medium text-solarized-base01 mb-2">Min Weight</label>
-                                    <input 
-                                        type="number" 
-                                        id="weightMinInput" 
-                                        value="1"
-                                        class="w-full px-3 py-2 text-sm bg-solarized-base3/60 border border-solarized-base1/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 focus:border-solarized-blue text-solarized-base00"
-                                    >
-                                </div>
-                                <div>
-                                    <label for="weightMaxInput" class="block text-sm font-medium text-solarized-base01 mb-2">Max Weight</label>
-                                    <input 
-                                        type="number" 
-                                        id="weightMaxInput" 
-                                        value="3"
-                                        class="w-full px-3 py-2 text-sm bg-solarized-base3/60 border border-solarized-base1/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 focus:border-solarized-blue text-solarized-base00"
-                                    >
-                                </div>
-                            </div>
-
-                            <!-- Remove Probability -->
-                            <div class="mb-6">
-                                <label for="removeProbInput" class="block text-sm font-medium text-solarized-base01 mb-2">Vertex Remove Probability</label>
-                                <input 
-                                    type="number" 
-                                    id="removeProbInput" 
-                                    step="0.01" 
-                                    value="0"
-                                    class="w-full px-3 py-2 text-sm bg-solarized-base3/60 border border-solarized-base1/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 focus:border-solarized-blue text-solarized-base00"
-                                >
-                                <p class="text-xs text-solarized-base1 mt-1">Probability of randomly removing vertices (0 = none, 0.1 = 10%)</p>
-                            </div>
-
-                            <!-- Single Update Button -->
-                            <button 
-                                id="updateSettingsBtn"
-                                class="w-full px-4 py-3 text-sm bg-solarized-green text-solarized-base3 rounded-lg hover:bg-solarized-cyan transition-colors focus:outline-none focus:ring-2 focus:ring-solarized-green/50 font-medium flex items-center justify-center gap-2"
+                        <!-- Game ID and Join (hidden in streamer mode) -->
+                        <div
+                            class="flex items-center justify-center gap-3"
+                            id="gameIdSection"
+                        >
+                            <label
+                                for="gameIdInput"
+                                class="text-sm text-solarized-base01 font-medium"
+                                >Game ID:</label
                             >
-                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                            <div class="flex items-center gap-2">
+                                <input
+                                    type="text"
+                                    id="gameIdInput"
+                                    placeholder="Enter game ID..."
+                                    class="px-3 py-1.5 text-sm bg-solarized-base3/60 border border-solarized-base1/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 focus:border-solarized-blue text-solarized-base00 placeholder-solarized-base1"
+                                    style="min-width: 120px"
+                                />
+                                <button
+                                    id="joinGameBtn"
+                                    class="px-3 py-1.5 text-sm bg-solarized-blue text-solarized-base3 rounded-lg hover:bg-solarized-cyan transition-colors focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 font-medium"
+                                >
+                                    Join
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Main Action Buttons -->
+                        <div class="flex items-center justify-center gap-3">
+                            <button
+                                id="settingsBtn"
+                                class="px-3 py-1.5 text-sm bg-solarized-base01 text-solarized-base3 rounded-lg hover:bg-solarized-base00 transition-colors focus:outline-none focus:ring-2 focus:ring-solarized-base01/50 font-medium flex items-center gap-1.5"
+                            >
+                                <svg
+                                    class="w-4 h-4"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        stroke-width="2"
+                                        d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+                                    ></path>
+                                    <path
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        stroke-width="2"
+                                        d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                                    ></path>
                                 </svg>
-                                Update All Settings
+                                Settings
+                            </button>
+                            <button
+                                id="forceStartBtn"
+                                class="px-3 py-1.5 text-sm bg-solarized-base01 text-solarized-base3 rounded-lg hover:bg-solarized-base00 transition-colors focus:outline-none focus:ring-2 focus:ring-solarized-base01/50 font-medium flex items-center gap-1.5"
+                            >
+                                <svg
+                                    class="w-4 h-4"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        stroke-width="2"
+                                        d="M14.828 14.828a4 4 0 01-5.656 0M9 10h1m4 0h1m-6 4h.01M15 14h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                                    ></path>
+                                </svg>
+                                Start Game
+                            </button>
+                            <button
+                                id="resetGameBtn"
+                                class="px-3 py-1.5 text-sm bg-solarized-base01 text-solarized-base3 rounded-lg hover:bg-solarized-base00 transition-colors focus:outline-none focus:ring-2 focus:ring-solarized-base01/50 font-medium flex items-center gap-1.5"
+                            >
+                                <svg
+                                    class="w-4 h-4"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        stroke-width="2"
+                                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                                    ></path>
+                                </svg>
+                                Reset Game
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="absolute top-64 left-0 right-0 bottom-0">
+                    <canvas
+                        id="gameCanvas"
+                        class="w-full h-full block"
+                    ></canvas>
+                </div>
+
+                <div
+                    class="absolute inset-0 bg-solarized-base3/90 backdrop-blur-md hidden flex-col justify-center items-center z-50"
+                    id="gameOverOverlay"
+                >
+                    <div
+                        class="bg-solarized-base2/90 rounded-2xl p-10 text-center max-w-md border-2 border-solarized-base1/30"
+                    >
+                        <h2
+                            class="text-4xl mb-5 bg-gradient-to-r from-solarized-yellow to-solarized-orange bg-clip-text text-transparent"
+                        >
+                            Game Over!
+                        </h2>
+                        <div class="text-lg mb-5" id="winnerList"></div>
+                        <div class="text-left mt-5" id="finalRankings"></div>
+                    </div>
+                </div>
+
+                <!-- Game Settings Modal -->
+                <div
+                    class="absolute inset-0 bg-black/60 backdrop-blur-sm hidden flex items-center justify-center z-50"
+                    id="settingsModal"
+                >
+                    <div
+                        class="bg-solarized-base2/95 rounded-xl p-6 max-w-md w-full mx-4 border border-solarized-base1/30 max-h-[80vh] overflow-y-auto"
+                    >
+                        <div class="flex items-center justify-between mb-6">
+                            <h3
+                                class="text-xl font-medium text-solarized-base01"
+                            >
+                                Game Settings
+                            </h3>
+                            <button
+                                id="closeSettings"
+                                class="p-1 text-solarized-base01 hover:text-solarized-base00 transition-colors"
+                            >
+                                <svg
+                                    class="w-6 h-6"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        stroke-width="2"
+                                        d="M6 18L18 6M6 6l12 12"
+                                    ></path>
+                                </svg>
                             </button>
                         </div>
 
-                        <!-- Status Messages -->
-                        <div id="settingsStatus" class="hidden p-3 rounded-lg border text-sm">
-                            <span id="settingsStatusText"></span>
+                        <div class="space-y-6">
+                            <!-- Game Settings Section -->
+                            <div>
+                                <h4
+                                    class="text-lg font-medium text-solarized-base01 mb-4"
+                                >
+                                    Game Configuration
+                                </h4>
+
+                                <!-- Max Turns -->
+                                <div class="mb-4">
+                                    <label
+                                        for="maxTurnsInput"
+                                        class="block text-sm font-medium text-solarized-base01 mb-2"
+                                        >Max Turns</label
+                                    >
+                                    <input
+                                        type="number"
+                                        id="maxTurnsInput"
+                                        value="24"
+                                        class="w-full px-3 py-2 text-sm bg-solarized-base3/60 border border-solarized-base1/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 focus:border-solarized-blue text-solarized-base00"
+                                    />
+                                </div>
+
+                                <!-- Turn Duration -->
+                                <div class="mb-4">
+                                    <label
+                                        for="turnDurationInput"
+                                        class="block text-sm font-medium text-solarized-base01 mb-2"
+                                        >Turn Duration (seconds)</label
+                                    >
+                                    <input
+                                        type="number"
+                                        id="turnDurationInput"
+                                        step="0.1"
+                                        value="1.0"
+                                        class="w-full px-3 py-2 text-sm bg-solarized-base3/60 border border-solarized-base1/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 focus:border-solarized-blue text-solarized-base00"
+                                    />
+                                </div>
+                            </div>
+
+                            <!-- Map Settings Section -->
+                            <div
+                                class="border-t border-solarized-base1/30 pt-6"
+                            >
+                                <h4
+                                    class="text-lg font-medium text-solarized-base01 mb-4"
+                                >
+                                    Map Configuration
+                                </h4>
+
+                                <!-- Map Type -->
+                                <div class="mb-4">
+                                    <label
+                                        for="mapTypeSelect"
+                                        class="block text-sm font-medium text-solarized-base01 mb-2"
+                                        >Map Type</label
+                                    >
+                                    <select
+                                        id="mapTypeSelect"
+                                        class="w-full px-3 py-2 text-sm bg-solarized-base3/60 border border-solarized-base1/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 focus:border-solarized-blue text-solarized-base00"
+                                    >
+                                        <option value="grid">Grid</option>
+                                        <option value="hex">Hexagonal</option>
+                                    </select>
+                                </div>
+
+                                <!-- Map Size -->
+                                <div class="grid grid-cols-2 gap-3 mb-4">
+                                    <div>
+                                        <label
+                                            for="mapWidthInput"
+                                            class="block text-sm font-medium text-solarized-base01 mb-2"
+                                            >Width</label
+                                        >
+                                        <input
+                                            type="number"
+                                            id="mapWidthInput"
+                                            value="7"
+                                            class="w-full px-3 py-2 text-sm bg-solarized-base3/60 border border-solarized-base1/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 focus:border-solarized-blue text-solarized-base00"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label
+                                            for="mapHeightInput"
+                                            class="block text-sm font-medium text-solarized-base01 mb-2"
+                                            >Height</label
+                                        >
+                                        <input
+                                            type="number"
+                                            id="mapHeightInput"
+                                            value="5"
+                                            class="w-full px-3 py-2 text-sm bg-solarized-base3/60 border border-solarized-base1/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 focus:border-solarized-blue text-solarized-base00"
+                                        />
+                                    </div>
+                                </div>
+
+                                <!-- Vertex Weight Range -->
+                                <div class="grid grid-cols-2 gap-3 mb-4">
+                                    <div>
+                                        <label
+                                            for="weightMinInput"
+                                            class="block text-sm font-medium text-solarized-base01 mb-2"
+                                            >Min Weight</label
+                                        >
+                                        <input
+                                            type="number"
+                                            id="weightMinInput"
+                                            value="1"
+                                            class="w-full px-3 py-2 text-sm bg-solarized-base3/60 border border-solarized-base1/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 focus:border-solarized-blue text-solarized-base00"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label
+                                            for="weightMaxInput"
+                                            class="block text-sm font-medium text-solarized-base01 mb-2"
+                                            >Max Weight</label
+                                        >
+                                        <input
+                                            type="number"
+                                            id="weightMaxInput"
+                                            value="1"
+                                            class="w-full px-3 py-2 text-sm bg-solarized-base3/60 border border-solarized-base1/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 focus:border-solarized-blue text-solarized-base00"
+                                        />
+                                    </div>
+                                </div>
+
+                                <!-- Remove Probability -->
+                                <div class="mb-6">
+                                    <label
+                                        for="removeProbInput"
+                                        class="block text-sm font-medium text-solarized-base01 mb-2"
+                                        >Vertex Remove Probability</label
+                                    >
+                                    <input
+                                        type="number"
+                                        id="removeProbInput"
+                                        step="0.01"
+                                        value="0"
+                                        class="w-full px-3 py-2 text-sm bg-solarized-base3/60 border border-solarized-base1/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-solarized-blue/50 focus:border-solarized-blue text-solarized-base00"
+                                    />
+                                    <p
+                                        class="text-xs text-solarized-base1 mt-1"
+                                    >
+                                        Probability of randomly removing
+                                        vertices (0 = none, 0.1 = 10%)
+                                    </p>
+                                </div>
+
+                                <!-- Single Update Button -->
+                                <button
+                                    id="updateSettingsBtn"
+                                    class="w-full px-4 py-3 text-sm bg-solarized-green text-solarized-base3 rounded-lg hover:bg-solarized-cyan transition-colors focus:outline-none focus:ring-2 focus:ring-solarized-green/50 font-medium flex items-center justify-center gap-2"
+                                >
+                                    <svg
+                                        class="w-4 h-4"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                    >
+                                        <path
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                            stroke-width="2"
+                                            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                                        ></path>
+                                    </svg>
+                                    Update All Settings
+                                </button>
+                            </div>
+
+                            <!-- Status Messages -->
+                            <div
+                                id="settingsStatus"
+                                class="hidden p-3 rounded-lg border text-sm"
+                            >
+                                <span id="settingsStatusText"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Mobile sidebar overlay -->
+            <div
+                id="sidebarOverlay"
+                class="md:hidden fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm z-40 hidden"
+            ></div>
+
+            <!-- Sidebar -->
+            <div
+                id="sidebar"
+                class="absolute top-0 md:right-0 -right-64 md:w-64 w-64 h-full bg-solarized-base2/80 backdrop-blur-xl border-l-2 border-solarized-base1/30 flex flex-col transition-all duration-300 ease-in-out z-50 md:z-auto"
+            >
+                <div class="p-5 border-b border-solarized-base1/30">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-base font-medium text-solarized-base01">
+                            Players
+                        </h3>
+                        <button
+                            id="closeSidebar"
+                            class="md:hidden p-1 text-solarized-base01 hover:text-solarized-base00 transition-colors"
+                        >
+                            <svg
+                                class="w-5 h-5"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                            >
+                                <path
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="2"
+                                    d="M6 18L18 6M6 6l12 12"
+                                ></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="flex flex-col gap-3" id="playerList">
+                        <!-- Players will be populated here -->
+                    </div>
+                </div>
+
+                <div class="px-5 pt-5 border-solarized-base1/30">
+                    <h3
+                        class="text-base font-medium mb-4 text-solarized-base01"
+                    >
+                        Game Log
+                    </h3>
+                </div>
+
+                <!-- Game Log (blurred in streamer mode) -->
+                <div
+                    class="flex-1 px-5 overflow-y-auto transition-all duration-300"
+                    id="gameLog"
+                >
+                    <!-- Log entries will be populated here -->
+                </div>
+
+                <div
+                    class="p-4 border-t border-solarized-base1/30 text-xs text-solarized-base01/70"
+                >
+                    <div class="text-center space-y-1">
+                        <div>
+                            Created by
+                            <a
+                                href="https://slama.dev/"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                class="text-solarized-blue hover:text-solarized-cyan transition-colors underline"
+                                >Tomáš Sláma</a
+                            >
+                        </div>
+                        <div>
+                            <a
+                                href="https://github.com/xiaoxiae/chromatic-warfare"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                class="text-solarized-green hover:text-solarized-yellow transition-colors underline"
+                                >View Source Code</a
+                            >
                         </div>
                     </div>
                 </div>
             </div>
         </div>
-        
-        <!-- Mobile sidebar overlay -->
-        <div id="sidebarOverlay" class="md:hidden fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm z-40 hidden"></div>
-        
-        <!-- Sidebar -->
-        <div id="sidebar" class="absolute top-0 md:right-0 -right-64 md:w-64 w-64 h-full bg-solarized-base2/80 backdrop-blur-xl border-l-2 border-solarized-base1/30 flex flex-col transition-all duration-300 ease-in-out z-50 md:z-auto">
-            <div class="p-5 border-b border-solarized-base1/30">
-                <div class="flex items-center justify-between mb-4">
-                    <h3 class="text-base font-medium text-solarized-base01">Players</h3>
-                    <button id="closeSidebar" class="md:hidden p-1 text-solarized-base01 hover:text-solarized-base00 transition-colors">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                        </svg>
-                    </button>
-                </div>
-                <div class="flex flex-col gap-3" id="playerList">
-                    <!-- Players will be populated here -->
-                </div>
-            </div>
-            
-            <div class="px-5 pt-5 border-solarized-base1/30">
-                <h3 class="text-base font-medium mb-4 text-solarized-base01">Game Log</h3>
-            </div>
-            
-            <!-- Game Log (blurred in streamer mode) -->
-            <div class="flex-1 px-5 overflow-y-auto transition-all duration-300" id="gameLog">
-                <!-- Log entries will be populated here -->
-            </div>
-            
-            <div class="p-4 border-t border-solarized-base1/30 text-xs text-solarized-base01/70">
-                <div class="text-center space-y-1">
-                    <div>
-                        Created by <a href="https://slama.dev/" target="_blank" rel="noopener noreferrer" class="text-solarized-blue hover:text-solarized-cyan transition-colors underline">Tomáš Sláma</a>
-                    </div>
-                    <div>
-                        <a href="https://github.com/xiaoxiae/chromatic-warfare" target="_blank" rel="noopener noreferrer" class="text-solarized-green hover:text-solarized-yellow transition-colors underline">View Source Code</a>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
 
-    <script type="module" src="./src/main.js"></script>
-    <script>
-        // Check for streamer mode
-        const urlParams = new URLSearchParams(window.location.search);
-        const isStreamerMode = urlParams.get('streamer_mode') === 'true';
-        
-        // Apply streamer mode styling if enabled
-        if (isStreamerMode) {
-            // Hide the game ID section
-            const gameIdSection = document.getElementById('gameIdSection');
-            gameIdSection.style.display = 'none';
-            
-            // Blur the game log
-            const gameLog = document.getElementById('gameLog');
-            gameLog.classList.add('blur-sm', 'select-none');
-            gameLog.style.pointerEvents = 'none';
-            
-            // Add a subtle indicator that streamer mode is active (optional)
-            document.title = 'Chromatic Warfare (Streamer Mode)';
-            
-            // Add a small visual indicator in the header
-            const header = document.querySelector('.absolute.top-0.left-0.right-0');
-            const streamerIndicator = document.createElement('div');
-            streamerIndicator.className = 'absolute top-2 left-2 bg-solarized-red/20 text-solarized-red px-2 py-1 rounded text-xs font-medium border border-solarized-red/30';
-            streamerIndicator.textContent = 'STREAMER MODE';
-            header.appendChild(streamerIndicator);
-        }
+        <script type="module" src="./src/main.js"></script>
+        <script>
+            // Check for streamer mode
+            const urlParams = new URLSearchParams(window.location.search);
+            const isStreamerMode = urlParams.get("streamer_mode") === "true";
 
-        // Mobile menu functionality
-        const menuToggle = document.getElementById('menuToggle');
-        const sidebar = document.getElementById('sidebar');
-        const sidebarOverlay = document.getElementById('sidebarOverlay');
-        const closeSidebar = document.getElementById('closeSidebar');
+            // Apply streamer mode styling if enabled
+            if (isStreamerMode) {
+                // Hide the game ID section
+                const gameIdSection = document.getElementById("gameIdSection");
+                gameIdSection.style.display = "none";
 
-        function openSidebar() {
-            sidebar.classList.remove('-right-64');
-            sidebar.classList.add('right-0');
-            sidebarOverlay.classList.remove('hidden');
-        }
+                // Blur the game log
+                const gameLog = document.getElementById("gameLog");
+                gameLog.classList.add("blur-sm", "select-none");
+                gameLog.style.pointerEvents = "none";
 
-        function closeSidebarMenu() {
-            sidebar.classList.remove('right-0');
-            sidebar.classList.add('-right-64');
-            sidebarOverlay.classList.add('hidden');
-        }
+                // Add a subtle indicator that streamer mode is active (optional)
+                document.title = "Chromatic Warfare (Streamer Mode)";
 
-        menuToggle.addEventListener('click', openSidebar);
-        closeSidebar.addEventListener('click', closeSidebarMenu);
-        sidebarOverlay.addEventListener('click', closeSidebarMenu);
-
-        // Close sidebar on escape key
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') {
-                closeSidebarMenu();
+                // Add a small visual indicator in the header
+                const header = document.querySelector(
+                    ".absolute.top-0.left-0.right-0",
+                );
+                const streamerIndicator = document.createElement("div");
+                streamerIndicator.className =
+                    "absolute top-2 left-2 bg-solarized-red/20 text-solarized-red px-2 py-1 rounded text-xs font-medium border border-solarized-red/30";
+                streamerIndicator.textContent = "STREAMER MODE";
+                header.appendChild(streamerIndicator);
             }
-        });
 
-        // Game ID functionality (only if not in streamer mode)
-        if (!isStreamerMode) {
-            const gameIdInput = document.getElementById('gameIdInput');
-            const joinGameBtn = document.getElementById('joinGameBtn');
+            // Mobile menu functionality
+            const menuToggle = document.getElementById("menuToggle");
+            const sidebar = document.getElementById("sidebar");
+            const sidebarOverlay = document.getElementById("sidebarOverlay");
+            const closeSidebar = document.getElementById("closeSidebar");
 
-            // Set current game ID in input
-            const currentGameId = urlParams.get('game') || 'default';
-            gameIdInput.value = currentGameId;
+            function openSidebar() {
+                sidebar.classList.remove("-right-64");
+                sidebar.classList.add("right-0");
+                sidebarOverlay.classList.remove("hidden");
+            }
 
-            function joinGame() {
-                const gameId = gameIdInput.value.trim();
-                if (!gameId) {
-                    gameIdInput.focus();
+            function closeSidebarMenu() {
+                sidebar.classList.remove("right-0");
+                sidebar.classList.add("-right-64");
+                sidebarOverlay.classList.add("hidden");
+            }
+
+            menuToggle.addEventListener("click", openSidebar);
+            closeSidebar.addEventListener("click", closeSidebarMenu);
+            sidebarOverlay.addEventListener("click", closeSidebarMenu);
+
+            // Close sidebar on escape key
+            document.addEventListener("keydown", (e) => {
+                if (e.key === "Escape") {
+                    closeSidebarMenu();
+                }
+            });
+
+            // Game ID functionality (only if not in streamer mode)
+            if (!isStreamerMode) {
+                const gameIdInput = document.getElementById("gameIdInput");
+                const joinGameBtn = document.getElementById("joinGameBtn");
+
+                // Set current game ID in input
+                const currentGameId = urlParams.get("game") || "default";
+                gameIdInput.value = currentGameId;
+
+                function joinGame() {
+                    const gameId = gameIdInput.value.trim();
+                    if (!gameId) {
+                        gameIdInput.focus();
+                        return;
+                    }
+
+                    // Update URL with new game ID
+                    const newUrl = new URL(window.location);
+                    newUrl.searchParams.set("game", gameId);
+                    window.location.href = newUrl.toString();
+                }
+
+                joinGameBtn.addEventListener("click", joinGame);
+
+                // Allow Enter key to join game
+                gameIdInput.addEventListener("keypress", (e) => {
+                    if (e.key === "Enter") {
+                        joinGame();
+                    }
+                });
+
+                // Focus input when clicked
+                gameIdInput.addEventListener("focus", () => {
+                    gameIdInput.select();
+                });
+            }
+
+            // Settings modal functionality
+            const settingsBtn = document.getElementById("settingsBtn");
+            const settingsModal = document.getElementById("settingsModal");
+            const closeSettings = document.getElementById("closeSettings");
+            const settingsStatus = document.getElementById("settingsStatus");
+            const settingsStatusText =
+                document.getElementById("settingsStatusText");
+
+            function openSettings() {
+                settingsModal.classList.remove("hidden");
+            }
+
+            function closeSettingsModal() {
+                settingsModal.classList.add("hidden");
+            }
+
+            function showSettingsStatus(message, type = "info") {
+                settingsStatus.className = `p-3 rounded-lg border text-sm ${
+                    type === "success"
+                        ? "bg-solarized-green/20 border-solarized-green text-solarized-green"
+                        : type === "error"
+                          ? "bg-solarized-red/20 border-solarized-red text-solarized-red"
+                          : "bg-solarized-blue/20 border-solarized-blue text-solarized-blue"
+                }`;
+                settingsStatusText.textContent = message;
+                settingsStatus.classList.remove("hidden");
+
+                // Auto-hide after 3 seconds
+                setTimeout(() => {
+                    settingsStatus.classList.add("hidden");
+                }, 3000);
+            }
+
+            settingsBtn.addEventListener("click", openSettings);
+            closeSettings.addEventListener("click", closeSettingsModal);
+            settingsModal.addEventListener("click", (e) => {
+                if (e.target === settingsModal) {
+                    closeSettingsModal();
+                }
+            });
+
+            // Close settings on escape key
+            document.addEventListener("keydown", (e) => {
+                if (
+                    e.key === "Escape" &&
+                    !settingsModal.classList.contains("hidden")
+                ) {
+                    closeSettingsModal();
+                }
+            });
+
+            // Settings functionality - will be connected to GameViewer
+            const updateSettingsBtn =
+                document.getElementById("updateSettingsBtn");
+            const resetGameBtn = document.getElementById("resetGameBtn");
+            const forceStartBtn = document.getElementById("forceStartBtn");
+
+            // These will be connected to the GameViewer instance once it's created
+            let gameViewer = null;
+
+            // Function to be called from main.js to set the gameViewer reference
+            window.connectSettingsToGameViewer = function (viewer) {
+                gameViewer = viewer;
+            };
+
+            updateSettingsBtn.addEventListener("click", () => {
+                if (!gameViewer) {
+                    showSettingsStatus("Game viewer not connected", "error");
                     return;
                 }
 
-                // Update URL with new game ID
-                const newUrl = new URL(window.location);
-                newUrl.searchParams.set('game', gameId);
-                window.location.href = newUrl.toString();
-            }
+                // Collect all settings
+                const maxTurns = parseInt(
+                    document.getElementById("maxTurnsInput").value,
+                );
+                const turnDuration = parseFloat(
+                    document.getElementById("turnDurationInput").value,
+                );
+                const mapType = document.getElementById("mapTypeSelect").value;
+                const width = parseInt(
+                    document.getElementById("mapWidthInput").value,
+                );
+                const height = parseInt(
+                    document.getElementById("mapHeightInput").value,
+                );
+                const weightMin = parseInt(
+                    document.getElementById("weightMinInput").value,
+                );
+                const weightMax = parseInt(
+                    document.getElementById("weightMaxInput").value,
+                );
+                const removeProb = parseFloat(
+                    document.getElementById("removeProbInput").value,
+                );
 
-            joinGameBtn.addEventListener('click', joinGame);
+                // Send both game and map settings
+                gameViewer.sendGameSettings(maxTurns, turnDuration);
+                gameViewer.sendMapSettings(
+                    mapType,
+                    width,
+                    height,
+                    weightMin,
+                    weightMax,
+                    removeProb,
+                );
 
-            // Allow Enter key to join game
-            gameIdInput.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') {
-                    joinGame();
+                showSettingsStatus(
+                    `Settings updated: ${maxTurns} turns, ${turnDuration}s duration, ${mapType} map ${width}x${height}`,
+                    "success",
+                );
+            });
+
+            resetGameBtn.addEventListener("click", () => {
+                if (!gameViewer) {
+                    showSettingsStatus("Game viewer not connected", "error");
+                    return;
                 }
+
+                gameViewer.sendResetGame();
+                showSettingsStatus("Game reset requested", "success");
             });
 
-            // Focus input when clicked
-            gameIdInput.addEventListener('focus', () => {
-                gameIdInput.select();
+            forceStartBtn.addEventListener("click", () => {
+                if (!gameViewer) {
+                    showSettingsStatus("Game viewer not connected", "error");
+                    return;
+                }
+
+                gameViewer.sendForceStart();
+                showSettingsStatus("Force start requested", "success");
             });
-        }
-
-        // Settings modal functionality
-        const settingsBtn = document.getElementById('settingsBtn');
-        const settingsModal = document.getElementById('settingsModal');
-        const closeSettings = document.getElementById('closeSettings');
-        const settingsStatus = document.getElementById('settingsStatus');
-        const settingsStatusText = document.getElementById('settingsStatusText');
-
-        function openSettings() {
-            settingsModal.classList.remove('hidden');
-        }
-
-        function closeSettingsModal() {
-            settingsModal.classList.add('hidden');
-        }
-
-        function showSettingsStatus(message, type = 'info') {
-            settingsStatus.className = `p-3 rounded-lg border text-sm ${
-                type === 'success' ? 'bg-solarized-green/20 border-solarized-green text-solarized-green' :
-                type === 'error' ? 'bg-solarized-red/20 border-solarized-red text-solarized-red' :
-                'bg-solarized-blue/20 border-solarized-blue text-solarized-blue'
-            }`;
-            settingsStatusText.textContent = message;
-            settingsStatus.classList.remove('hidden');
-            
-            // Auto-hide after 3 seconds
-            setTimeout(() => {
-                settingsStatus.classList.add('hidden');
-            }, 3000);
-        }
-
-        settingsBtn.addEventListener('click', openSettings);
-        closeSettings.addEventListener('click', closeSettingsModal);
-        settingsModal.addEventListener('click', (e) => {
-            if (e.target === settingsModal) {
-                closeSettingsModal();
-            }
-        });
-
-        // Close settings on escape key
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !settingsModal.classList.contains('hidden')) {
-                closeSettingsModal();
-            }
-        });
-
-        // Settings functionality - will be connected to GameViewer
-        const updateSettingsBtn = document.getElementById('updateSettingsBtn');
-        const resetGameBtn = document.getElementById('resetGameBtn');
-        const forceStartBtn = document.getElementById('forceStartBtn');
-
-        // These will be connected to the GameViewer instance once it's created
-        let gameViewer = null;
-
-        // Function to be called from main.js to set the gameViewer reference
-        window.connectSettingsToGameViewer = function(viewer) {
-            gameViewer = viewer;
-        };
-
-        updateSettingsBtn.addEventListener('click', () => {
-            if (!gameViewer) {
-                showSettingsStatus('Game viewer not connected', 'error');
-                return;
-            }
-
-            // Collect all settings
-            const maxTurns = parseInt(document.getElementById('maxTurnsInput').value);
-            const turnDuration = parseFloat(document.getElementById('turnDurationInput').value);
-            const mapType = document.getElementById('mapTypeSelect').value;
-            const width = parseInt(document.getElementById('mapWidthInput').value);
-            const height = parseInt(document.getElementById('mapHeightInput').value);
-            const weightMin = parseInt(document.getElementById('weightMinInput').value);
-            const weightMax = parseInt(document.getElementById('weightMaxInput').value);
-            const removeProb = parseFloat(document.getElementById('removeProbInput').value);
-
-            // Send both game and map settings
-            gameViewer.sendGameSettings(maxTurns, turnDuration);
-            gameViewer.sendMapSettings(mapType, width, height, weightMin, weightMax, removeProb);
-            
-            showSettingsStatus(`Settings updated: ${maxTurns} turns, ${turnDuration}s duration, ${mapType} map ${width}x${height}`, 'success');
-        });
-
-        resetGameBtn.addEventListener('click', () => {
-            if (!gameViewer) {
-                showSettingsStatus('Game viewer not connected', 'error');
-                return;
-            }
-
-            gameViewer.sendResetGame();
-            showSettingsStatus('Game reset requested', 'success');
-        });
-
-        forceStartBtn.addEventListener('click', () => {
-            if (!gameViewer) {
-                showSettingsStatus('Game viewer not connected', 'error');
-                return;
-            }
-
-            gameViewer.sendForceStart();
-            showSettingsStatus('Force start requested', 'success');
-        });
-    </script>
-</body>
+        </script>
+    </body>
 </html>
