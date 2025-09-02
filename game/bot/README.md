@@ -1,12 +1,14 @@
 # Bot Library for Chromatic Warfare
 
-This library provides a simple API for creating bots. Inherit from `GameBot`, implement `play_turn()`, and call `bot.run()`.
+This library provides a simple API for creating bots.
+Inherit from `GameBot`, implement `play_turn()`, and call `bot.run()`.
 
 ## Quick Start
 
-1. install requirements (`pip install -r requirements.txt`)
-2. pun this Python script, which implements a basic bot, to play a game against 3 other bots
-3. **improve** the bot and play against others (use game `default` to play the one at [https://cw.slama.dev/](https://cw.slama.dev/))!
+1. install `websockets` (`pip install websockets`)
+2. get the bot library (`wget 'https://raw.githubusercontent.com/xiaoxiae/chromatic-warfare/refs/heads/master/game/bot/lib.py'`)
+3. run **↓ this Python script ↓**, which uses the bot library to implement a basic bot, to play a game against 3 other bots
+
 ```python
 #!/usr/bin/env python3
 import os
@@ -67,6 +69,9 @@ if __name__ == "__main__":
 
     bot.run(bots=[(1, "easy"), (1, "medium"), (1, "hard")])
 ```
+
+If this works, try to **improve** the bot and play against others (use game `default` to play the one at [https://cw.slama.dev/](https://cw.slama.dev/))!
+For improvement ideas, see default bot implementations (`easy.py`, `medium.py`, `hard.py`), and the documentation below:
 
 ## Movement Commands
 
